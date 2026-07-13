@@ -10,6 +10,7 @@ WHAT TO ADD:
         ctrl + c = copy | ctrl + v = paste | Left click + move on selected Area to drag
     2. Chuck System
     3. HashLife
+    4. Load RLE files
 '''
 
 
@@ -30,6 +31,7 @@ camera_x = 0.0
 camera_y = 0.0
 zoom = 1.0
 dragging = False
+cam_in_center = False
 last_mouse_pos = (0, 0)
 
 line_width = 1
@@ -38,7 +40,7 @@ alive_cells_on_board = set()
 
 game_running = True
 active = True
-history = deque(maxlen=100)
+history = deque(maxlen=1000)
 redo_history = []
 
 def update_speed(GpS, keys): # Update the GpS on Key Input
@@ -54,14 +56,113 @@ def update_speed(GpS, keys): # Update the GpS on Key Input
 
     return GpS
 
-def save_board(): # Save the game state with "s"
-    with open("savedState.txt", "w") as f:
-        json.dump(list(alive_cells_on_board), f)
+def center_cam(): # Center the cam so you can see every cell 
+    if not alive_cells_on_board: # If everything is dead do nothing
+        return
+    
+    every_y = [y for _,y in alive_cells_on_board]
+    every_x = [x for x,_ in alive_cells_on_board]
 
-def load_board():
+    min_x, max_x = min(every_x), max(every_x)
+    min_y, max_y = min(every_y), max(every_y)
+
+    pattern_height = (max_y - min_y + 1) * cell_size
+    pattern_width = (max_x - min_x + 1) * cell_size
+
+    global zoom, camera_x, camera_y
+    zoom = min(10, max(0.055, min(WIDTH / pattern_width, HEIGHT / pattern_height) * 0.9)) # Do zoom so it zooms good enough that everything shows + edge empty :3
+
+    center_y = (min_y + max_y + 1) / 2 * cell_size
+    center_x = (min_x + max_x + 1) / 2 * cell_size
+
+    camera_x = center_x * zoom - WIDTH / 2
+    camera_y = center_y * zoom - HEIGHT / 2
+
+def save_rle(file): # Save the game state with "s"
+    if not alive_cells_on_board:
+        return
+    
+    xe = [x for x,_ in alive_cells_on_board]
+    ye = [y for _,y in alive_cells_on_board]
+    max_x, min_x = max(xe), min(xe)
+    max_y, min_y = max(ye), min(ye)
+
+    width = max_x - min_x + 1
+    height = max_y - min_y + 1
+
+    lines_out = []
+    for y in range(min_y, max_y + 1):
+        row_str = ""
+        run_char = None
+        run_count = 0
+
+        for x in range(min_x, max_x + 1):
+            cell_char = "o" if (x, y) in alive_cells_on_board else "b"
+
+            if cell_char == run_char:
+                run_count += 1
+            else:
+                if run_char is not None:
+                    row_str += (str(run_count) if run_count > 1 else "") + run_char
+                run_char = cell_char
+                run_count = 1
+
+        if run_char == "o": # Add an last alive if alive else dont add dead
+            row_str += (str(run_count) if run_count > 1 else "") + run_char
+
+        lines_out.append(row_str)
+
+    pattern_str = "$".join(lines_out) + "!"
+
+    with open(file, "w") as f:
+        f.write(f"x = {width}, y = {height}, rule = B3/S23\n") # Change Rule later when you have a B/S mask thingy :3
+        f.write(pattern_str + "\n")
+
+def load_rle(file): # Load the rle file with "l"
     try:
-        with open("savedState.txt", "r") as f:
-            return set(tuple(cell) for cell in json.load(f)) # Load the game state with "l"
+        global alive_cells_on_board, gen
+
+        new_alive = set()
+        x, y = 0, 0
+
+        with open(file, "r") as f: # Read the file
+            lines = f.readlines()
+
+        pattern_lines = []
+        for line in lines: # Ignore comments + the Header (for now)
+            line = line.strip()
+            if line.startswith("#"):
+                continue
+            if line.startswith("x"):
+                continue
+            pattern_lines.append(line)
+
+        pattern_str = "".join(pattern_lines) # Make it 1 Line
+
+        count_str = ""
+        for char in pattern_str:
+            if char.isdigit():
+                count_str += char
+            elif char == "b":
+                count = int(count_str) if count_str else 1
+                x += count
+                count_str = ""
+            elif char == "o":
+                count = int(count_str) if count_str else 1
+                for i in range(count):
+                    new_alive.add((x + i, y))
+                x += count
+                count_str = ""
+            elif char == "$":
+                count = int(count_str) if count_str else 1
+                x = 0
+                y += count
+            elif char == "!":
+                break
+            
+        alive_cells_on_board = new_alive
+        gen = 0
+        center_cam()
 
     except (FileNotFoundError, json.JSONDecodeError):
         return set() # Else create a empty game state if none exists
@@ -140,10 +241,12 @@ def update(alive): # The REAL GoL rules
 # Print the Controls + Intro
 print("Welcome to GoL:\n")
 print("Controls:")
-print("  's'               = Save")
-print("  'l'               = Load")
+print("  's'               = Save .rle file")
+print("  'l'               = Load .rle file")
 print("  'r'               = Clear / Reset")
 print("  'n'               = Go 1 Step / Gen")
+print("  'f'               = Center cam once")
+print("  'g'               = Toggle center cam")
 print("  'Right'           = +1 GpS")
 print("  'Up'              = +10 GpS")
 print("  'Left'            = -1 GpS")
@@ -170,16 +273,18 @@ while game_running:
             if event.key == pygame.K_SPACE:
                 active = not active
             if event.key == pygame.K_s: # Save
-                save_board()
-                print("Saved!")
+                save_rle("RLE/game.rle") # Change if you want a different filename for the saved .rle 
+                print("Saved .rle!")
             if event.key == pygame.K_l: # Load
-                alive_cells_on_board = load_board()
-                print("Loaded!")
+                load_rle("RLE/gosper_glider_gun.rle") # Change if you want a different loaded .rle file
+                print("Loaded .rle!")
             if event.key == pygame.K_n and not active: # +1 Step
                 history.append(frozenset(alive_cells_on_board))
                 redo_history.clear()
                 gen += 1
                 alive_cells_on_board = update(alive_cells_on_board)
+                if cam_in_center:
+                    center_cam()
             if event.key == pygame.K_r: # Clear / Reset
                 alive_cells_on_board.clear()
                 gen = 0
@@ -215,6 +320,12 @@ while game_running:
                     alive_cells_on_board = set(redo_history.pop())
                     gen += 1
 
+            if event.key == pygame.K_g: # Toggle center cam with 'g'
+                cam_in_center = not cam_in_center
+
+            if event.key == pygame.K_f: # Center cam once with 'f'
+                center_cam()
+
         if event.type == pygame.MOUSEBUTTONDOWN: # get click input and turn them into board pos + color them with board
             if event.button == 1:  # Leftclick
                 click_cell(cell_size)
@@ -249,7 +360,7 @@ while game_running:
             else:
                 zoom /= 1.1
 
-            zoom = max(0.1, min(10, zoom))
+            zoom = max(0.055, min(10, zoom))
 
             camera_x = world_x * zoom - mouse_x
             camera_y = world_y * zoom - mouse_y
@@ -271,10 +382,12 @@ while game_running:
             redo_history.clear()
             gen += 1
             alive_cells_on_board = update(alive_cells_on_board)
+            if cam_in_center:
+                    center_cam()
 
         accumulator -= 1
 
-    pygame.display.set_caption(f"Conways Game Of Life | Gen = {gen} | Alive={len(alive_cells_on_board)} | GpS = {GpS} | FPS = {clock.get_fps():.1f} | Running = {active}") # Update Data
+    pygame.display.set_caption(f"Conways Game Of Life | Gen = {gen} | Alive={len(alive_cells_on_board)} | GpS = {GpS} | FPS = {clock.get_fps():.1f} | Running = {active} | Cam centered = {cam_in_center}") # Update Data
     pygame.display.flip()
 
 pygame.quit()
