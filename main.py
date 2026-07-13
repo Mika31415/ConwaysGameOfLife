@@ -7,12 +7,10 @@ from collections import deque
 '''
 WHAT TO ADD:
     1. Copy/Paste/Drag system with RightClick select 
-        ctrl + c = copy | ctrl + v = paste | Left click + move on selected Area to drag
+        ctrl + c = copy | ctrl + v = paste | Left click + move on selected Area to drag | e = rotate clockwise | q = rotate ccw
     2. Chuck System
     3. HashLife
-    4. Load RLE files
 '''
-
 
 # Create Game Window + Base Values / Setup
 pygame.init()
@@ -22,11 +20,15 @@ HEIGHT = 900
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
 
+# Basic GoL stuffies :3
 gen = 0
 accumulator = 0
 GpS = 1
 fps = 60
+game_running = True
+active = True
 
+# Cam stuff
 camera_x = 0.0
 camera_y = 0.0
 zoom = 1.0
@@ -34,29 +36,36 @@ dragging = False
 cam_in_center = False
 last_mouse_pos = (0, 0)
 
+# Grid/Cell shtuff
 line_width = 1
-cell_size = 10 # The size of one cell
+cell_size = 10
 alive_cells_on_board = set()
 
-game_running = True
-active = True
+# Undo/Redo thingy
 history = deque(maxlen=1000)
 redo_history = []
 
-def update_speed(GpS, keys): # Update the GpS on Key Input
+# Update the GpS on Key Input
+def update_speed(GpS, keys):
     if keys[pygame.K_LEFT] and GpS > 1: # Decrease Speed by 1
         GpS -= 1
-    if keys[pygame.K_DOWN] and GpS > 10: # Decrease Speed by 10
-        GpS -= 10
-
+    if keys[pygame.K_DOWN]: # Decrease Speed by 10 or lower
+        for _ in range(10):
+            if GpS == 1:
+                break
+            GpS -= 1
     if keys[pygame.K_RIGHT] and GpS < 1000: # Increase Speed by 1
         GpS += 1
-    if keys[pygame.K_UP] and GpS <= 990: # Increase Speed by 10
-        GpS += 10
+    if keys[pygame.K_UP]: # Increase Speed by 10 or lower
+        for _ in range(10):
+            if GpS == 1000:
+                break
+            GpS += 1
 
     return GpS
 
-def center_cam(): # Center the cam so you can see every cell 
+# Center the cam so you can see every cell 
+def center_cam():
     if not alive_cells_on_board: # If everything is dead do nothing
         return
 
@@ -78,7 +87,8 @@ def center_cam(): # Center the cam so you can see every cell
     camera_x = center_x * zoom - WIDTH / 2
     camera_y = center_y * zoom - HEIGHT / 2
 
-def save_rle(file): # Save the game state with "s"
+# Save the game state with "s"
+def save_rle(file):
     if not alive_cells_on_board:
         return
 
@@ -118,7 +128,8 @@ def save_rle(file): # Save the game state with "s"
         f.write(f"x = {width}, y = {height}, rule = B3/S23\n") # Change Rule later when you have a B/S mask thingy :3
         f.write(pattern_str + "\n")
 
-def load_rle(file): # Load the rle file with "l"
+# Load the rle file with "l"
+def load_rle(file):
     try:
         global alive_cells_on_board, gen
 
@@ -167,7 +178,8 @@ def load_rle(file): # Load the rle file with "l"
     except (FileNotFoundError, json.JSONDecodeError):
         return set() # Else create a empty game state if none exists
 
-def draw_grid(cell_size, line_width): # Draw the base grid
+# Draw the base grid
+def draw_grid(cell_size, line_width):
     step = cell_size * zoom
     grid_width = max(1, int(line_width * zoom))
 
@@ -187,6 +199,7 @@ def draw_grid(cell_size, line_width): # Draw the base grid
 
         pygame.draw.line(screen, (20, 20, 20), (0, pos), (WIDTH, pos), grid_width)
 
+# Draw a cell (to Loop over every living cell and draw it)
 def draw_cell(cell_size):
     step = cell_size * zoom
 
@@ -205,7 +218,8 @@ def draw_cell(cell_size):
 
             pygame.draw.rect(screen, (255,255,0), rect)
 
-def click_cell(cell_size): # Toggle alive/dead on click
+# Toggle alive/dead on click
+def click_cell(cell_size):
     step = cell_size * zoom
     mx, my = pygame.mouse.get_pos()
 
@@ -217,13 +231,15 @@ def click_cell(cell_size): # Toggle alive/dead on click
     else:
         alive_cells_on_board.add((x,y))
 
-DIRECTIONS = [ # Global directions for every nearby cell
+# Global directions for every nearby cell
+DIRECTIONS = [
     (-1, -1), (-1, 0), (-1, 1),
     ( 0, -1),          ( 0, 1),
     ( 1, -1), ( 1, 0), ( 1, 1)
 ]
 
-def update(alive): # The REAL GoL rules
+# The REAL GoL B/S rules
+def update(alive):
     neighbors = defaultdict(int)
 
     for x, y in alive:
@@ -233,7 +249,7 @@ def update(alive): # The REAL GoL rules
     new_alive = set()
 
     for cell, count in neighbors.items():
-        if count == 3 or (count == 2 and cell in alive):
+        if count == 3 or (count == 2 and cell in alive): # B or S + in alive then add
             new_alive.add(cell)
 
     return new_alive
