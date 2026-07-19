@@ -6,13 +6,28 @@ from collections import deque
 
 '''
 WHAT TO ADD:
-    1. B/S-Rules with Txt-Input before start (Default is B3/S23)
-    2. Pattern bib with 0-9 num pad (customize with .rle in folder)
-    3. Numpy Vectors
-    4. Chunk-System
-    5. Multi-Threading/Processing
-    6. HashLife
+    1. Numpy Vectors
+    2. Chunk-System
+    3. Multi-Threading/Processing
+    4. HashLife
 '''
+
+# Catch Birth / Survive Values
+print("\nPlease tell us the rules (just type the numbers like '23' or '357') (Input the num '9' if it should be empty)")
+birth_input = input("  How many cells does a cell need to be born?\n")
+survive_input = input("  How many cells does a cell need to survive?\n")
+
+# Birth Things
+birth_values = {int(char) for char in birth_input if char.isdigit()} if birth_input else {3} # Base GoL B
+birth_values = birth_values if birth_values != set() else {3}
+birth_values.discard(9)
+
+# Survive Things duh
+survive_values = {int(char) for char in survive_input if char.isdigit()} if survive_input else {2, 3} # Base GoL S
+survive_values = survive_values if survive_values != set() else {2, 3}
+survive_values.discard(9)
+
+print(f"Birth: {birth_values} | Survive: {survive_values}")
 
 # Create Game Window + Base Values / Setup
 pygame.init()
@@ -144,14 +159,19 @@ def save_rle(file):
 
     pattern_str = "$".join(lines_out) + "!"
 
-    with open(file, "w") as f:
-        f.write(f"x = {width}, y = {height}, rule = B3/S23\n") # Change Rule later when you have a B/S mask thingy :3
-        f.write(pattern_str + "\n")
+    try:
+        with open(file, "w") as f:
+            birth_str = "".join(str(n) for n in sorted(birth_values))
+            survive_str = "".join(str(n) for n in sorted(survive_values))
+            f.write(f"x = {width}, y = {height}, rule = B{birth_str}/S{survive_str}\n")
+            f.write(pattern_str + "\n")
+    except (OSError, PermissionError):
+        print(f"Couldn't save the file: {file}")
 
 # Load the rle file with "l"
 def load_rle(file):
     try:
-        global alive_cells_on_board, gen
+        global alive_cells_on_board, gen, birth_values, survive_values
 
         new_alive = set()
         x, y = 0, 0
@@ -160,12 +180,18 @@ def load_rle(file):
             lines = f.readlines()
 
         pattern_lines = []
-        for line in lines: # Ignore comments + the Header (for now)
+        for line in lines: # Ignore comments
             line = line.strip()
             if line.startswith("#"):
                 continue
-            if line.startswith("x"):
-                continue
+            if line.startswith("x"): # read the rules
+                rules = line.split()[-1]
+                birth_rule_str = rules.split("/")[0]
+                survive_rule_str = rules.split("/")[1]
+                birth_values = {int(char) for char in birth_rule_str if char.isdigit()}
+                survive_values = {int(char) for char in survive_rule_str if char.isdigit()}
+                print(f"Loading changed rules to: {rules}")
+                continue 
             pattern_lines.append(line)
 
         pattern_str = "".join(pattern_lines) # Make it 1 Line
@@ -174,7 +200,7 @@ def load_rle(file):
         for char in pattern_str:
             if char.isdigit():
                 count_str += char
-            elif char == "b":
+            elif char == "b" or char == ".":
                 count = int(count_str) if count_str else 1
                 x += count
                 count_str = ""
@@ -191,12 +217,35 @@ def load_rle(file):
             elif char == "!":
                 break
 
-        alive_cells_on_board = new_alive
-        gen = 0
-        center_cam()
+        return new_alive
 
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (FileNotFoundError, json.JSONDecodeError, PermissionError):
         return set() # Else create a empty game state if none exists
+    
+# Numpad hotkeys:
+def numpad_hotkeys(event):
+    global clipboard
+    if event.type == pygame.KEYDOWN:
+        if event.key == pygame.K_KP0:
+            clipboard = load_rle("Numpad/glider.rle") # 0 Hotkey Numpad (change if you want a different rle file)
+        if event.key == pygame.K_KP1:
+            clipboard = load_rle("Numpad/gosper_glider_gun.rle") # 1 Hotkey Numpad (change if you want a different rle file)
+        if event.key == pygame.K_KP2:
+            clipboard = load_rle("Numpad/eater.rle") # 2 Hotkey Numpad (change if you want a different rle file)
+        if event.key == pygame.K_KP3:
+            clipboard = load_rle("Numpad/") # 3 Hotkey Numpad (change if you want a different rle file)
+        if event.key == pygame.K_KP4:
+            clipboard = load_rle("Numpad/") # 4 Hotkey Numpad (change if you want a different rle file)
+        if event.key == pygame.K_KP5:
+            clipboard = load_rle("Numpad/") # 5 Hotkey Numpad (change if you want a different rle file)
+        if event.key == pygame.K_KP6:
+            clipboard = load_rle("Numpad/") # 6 Hotkey Numpad (change if you want a different rle file)
+        if event.key == pygame.K_KP7:
+            clipboard = load_rle("Numpad/") # 7 Hotkey Numpad (change if you want a different rle file)
+        if event.key == pygame.K_KP8:
+            clipboard = load_rle("Numpad/") # 8 Hotkey Numpad (change if you want a different rle file)
+        if event.key == pygame.K_KP9:
+            clipboard = load_rle("Numpad/") # 9 Hotkey Numpad (change if you want a different rle file)
 
 # Draw the base grid
 def draw_grid(cell_size, line_width):
@@ -277,7 +326,7 @@ def update(alive):
     new_alive = set()
 
     for cell, count in neighbors.items():
-        if count == 3 or (count == 2 and cell in alive): # B or S + in alive then add
+        if count in birth_values or (count in survive_values and cell in alive): # B or S + in alive then add
             new_alive.add(cell)
 
     return new_alive
@@ -339,14 +388,14 @@ def select_field(event):
         if has_selection and event.key == pygame.K_d: # Delete Selected
             x_min = min(start[0], end[0])
             y_min = min(start[1], end[1])
-            for (dx, dy) in original_selected_cells:
+            for (dx, dy) in original_selected_cells if dragging_selection else alive_selected_cells:
                 alive_cells_on_board.discard((dx + x_min, dy + y_min))
             dragging_selection = False
             has_selection = False
             active = was_active_before_edit
 
         if event.key == pygame.K_e:
-            if dragging_selection: # Rotate the drag | CW
+            if dragging_selection and alive_selected_cells: # Rotate the drag | CW
                 xs = [x for x, _ in alive_selected_cells]
                 ys = [y for _, y in alive_selected_cells]
                 center_x = round((min(xs) + max(xs)) / 2)
@@ -366,7 +415,7 @@ def select_field(event):
                 }
 
         if event.key == pygame.K_q:
-            if dragging_selection: # Rotate the drag | CCW
+            if dragging_selection and alive_selected_cells: # Rotate the drag | CCW
                 xs = [x for x, _ in alive_selected_cells]
                 ys = [y for _, y in alive_selected_cells]
                 center_x = round((min(xs) + max(xs)) / 2)
@@ -386,7 +435,7 @@ def select_field(event):
                 }
 
         if event.key == pygame.K_w:
-            if dragging_selection: # Mirror the drag left right
+            if dragging_selection and alive_selected_cells: # Mirror the drag left right
                 xs = [x for x, _ in alive_selected_cells]
                 center_x = round((min(xs) + max(xs)) / 2)
                 alive_selected_cells = {
@@ -402,8 +451,8 @@ def select_field(event):
                 }
 
         if event.key == pygame.K_2:
-            if dragging_selection: # Mirror the drag up down
-                ys = [y for y, _ in alive_selected_cells]
+            if dragging_selection and alive_selected_cells: # Mirror the drag up down
+                ys = [y for _, y in alive_selected_cells]
                 center_y = round((min(ys) + max(ys)) / 2)
                 alive_selected_cells = {
                     (x, 2 * center_y - y)
@@ -544,8 +593,15 @@ while game_running:
                 save_rle("RLE/game.rle") # Change if you want a different filename for the saved .rle 
                 print("Saved .rle!")
             if event.key == pygame.K_l: # Load
-                load_rle("RLE/gosper_glider_gun.rle") # Change if you want a different loaded .rle file
+                alive_cells_on_board = load_rle("RLE/replicator.rle") # Change if you want a different loaded .rle file
+                gen = 0
+                center_cam()
                 print("Loaded .rle!")
+                if has_selection or selecting or dragging_selection:
+                    has_selection = False
+                    selecting = False
+                    dragging_selection = False
+                    active = was_active_before_edit
             if event.key == pygame.K_n and not active and not has_selection and not selecting and not dragging_selection: # +1 Step
                 history.append(frozenset(alive_cells_on_board))
                 redo_history.clear()
@@ -651,6 +707,7 @@ while game_running:
             camera_y = world_y * zoom - mouse_y
 
         select_field(event)
+        numpad_hotkeys(event)
 
     if show_preview: # Draw the preview if Toggled True
         draw_paste_preview()
@@ -681,7 +738,9 @@ while game_running:
 
         accumulator -= 1
 
-    pygame.display.set_caption(f"Conways Game Of Life | Gen = {gen} | Alive={len(alive_cells_on_board)} | GpS = {GpS} | FPS = {clock.get_fps():.1f} | Running = {active} | Cam centered = {cam_in_center} | Show Preview = {show_preview}") # Update Data
+    birth_str = "".join(str(n) for n in sorted(birth_values))
+    survive_str = "".join(str(n) for n in sorted(survive_values))
+    pygame.display.set_caption(f"Rule = B{birth_str}/S{survive_str} | Gen = {gen} | Alive={len(alive_cells_on_board)} | GpS = {GpS} | FPS = {clock.get_fps():.1f} | Running = {active} | Cam centered = {cam_in_center} | Show Preview = {show_preview}") # Update Data
     pygame.display.flip()
 
 pygame.quit()
