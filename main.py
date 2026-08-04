@@ -1,5 +1,4 @@
 import pygame
-import json
 import math
 import numpy as np
 from collections import deque
@@ -12,6 +11,40 @@ WHAT TO ADD:
     3. Multi-Threading/Processing
     4. HashLife
 '''
+'''
+WHAT TO FIX/OPTIMIZE:
+    1. save_rle -> Numpy vectors
+    2. history_1_step -> Save Deltas
+    3. center_cam -> Update for each add/remove cell instead of every CAM_CENTER_EVERY_GEN
+    4. Use State Enums
+    5. Use Modules instead of 1 big File
+'''
+# ---------------------------- Change freely for Hotkeys etc. ------------------------------
+NUMPAD_HOTKEYS = {
+    pygame.K_KP0: "Numpad/glider.rle", # Hotkey Numpad 0
+    pygame.K_KP1: "Numpad/gosper_glider_gun.rle", # Hotkey Numpad 1
+    pygame.K_KP2: "Numpad/eater.rle", # Hotkey Numpad 2
+    pygame.K_KP3: "Numpad/", # Hotkey Numpad 3
+    pygame.K_KP4: "Numpad/", # Hotkey Numpad 4
+    pygame.K_KP5: "Numpad/", # Hotkey Numpad 5
+    pygame.K_KP6: "Numpad/", # Hotkey Numpad 6
+    pygame.K_KP7: "Numpad/", # Hotkey Numpad 7
+    pygame.K_KP8: "Numpad/", # Hotkey Numpad 8
+    pygame.K_KP9: "Numpad/"  # Hotkey Numpad 9
+}
+LOADING_FILE = "RLE/replicator.rle" # Change if you want a different loaded .rle file
+SAVING_FILE = "RLE/game.rle" # Change if you want a different filename for the saved .rle
+
+WIDTH = 1000 # Game Window Width
+HEIGHT = 1000 # Game Window Height
+
+MIN_ZOOM = 0.055 # Minimum Zoom Level
+MAX_ZOOM = 10.0 # Maximum Zoom Level
+CAM_CENTER_EVERY_GEN = 10 # Center the cam every X generations (for performance reasons)
+
+HISTORY_LIMIT = 1000 # Limit of the Undo/Redo History
+HISTORY_SAVE_EVERY_GEN = 10 # Save history every X generations (for performance reasons)
+# -----------------------------------------------------------------------------------------
 
 # Catch Birth / Survive Values
 print("\nPlease tell us the rules (just type the numbers like '23' or '357') (Input the num '9' if it should be empty)")
@@ -33,8 +66,6 @@ print(f"Birth: {birth_values} | Survive: {survive_values}")
 # Create Game Window + Base Values / Setup
 pygame.init()
 
-WIDTH = 900
-HEIGHT = 900
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
 
@@ -57,6 +88,7 @@ last_mouse_pos = (0, 0)
 # Grid/Cell shtuff
 line_width = 1
 cell_size = 10
+
 alive_cells_on_board = set()
 current_grid = None
 grid_offset_x = 0
@@ -73,8 +105,14 @@ start_drag_selection = None
 was_active_before_edit = False
 
 # Undo/Redo thingy
-history = deque(maxlen=1000)
-redo_history = []
+history = deque(maxlen=HISTORY_LIMIT)
+redo_history = deque(maxlen=HISTORY_LIMIT)
+
+# The Copy/Paste/Drag thingys
+selecting = False
+has_selection = False
+start = None
+end = None
 
 # Update the GpS on Key Input
 def update_speed(GpS, keys):
@@ -99,6 +137,19 @@ def update_speed(GpS, keys):
 def get_step():
     return max(1, round(cell_size * zoom))
 
+# And another helpy func to calc the min/max cordinates of x and y of the alive cells
+def get_min_max_coords(cells):
+    if not cells:
+        return (0, 0, 0, 0)
+
+    xs = [x for x, _ in cells]
+    ys = [y for _, y in cells]
+
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+
+    return (min_x, max_x, min_y, max_y)
+
 # A lil help function to get the mouse pos in world cordinates
 def get_mouse_world_pos():
     step = get_step()
@@ -114,17 +165,13 @@ def center_cam():
     if not alive_cells_on_board: # If everything is dead do nothing
         return
 
-    every_y = [y for _,y in alive_cells_on_board]
-    every_x = [x for x,_ in alive_cells_on_board]
-
-    min_x, max_x = min(every_x), max(every_x)
-    min_y, max_y = min(every_y), max(every_y)
+    min_x, max_x, min_y, max_y = get_min_max_coords(alive_cells_on_board)
 
     pattern_height = (max_y - min_y + 1) * cell_size
     pattern_width = (max_x - min_x + 1) * cell_size
 
     global zoom, camera_x, camera_y
-    zoom = min(10, max(0.055, min(WIDTH / pattern_width, HEIGHT / pattern_height) * 0.9)) # Do zoom so it zooms good enough that everything shows + edge empty :3
+    zoom = min(MAX_ZOOM, max(MIN_ZOOM, min(WIDTH / pattern_width, HEIGHT / pattern_height) * 0.9)) # Do zoom so it zooms good enough that everything shows + edge empty :3
 
     center_y = (min_y + max_y + 1) / 2 * cell_size
     center_x = (min_x + max_x + 1) / 2 * cell_size
@@ -137,10 +184,7 @@ def save_rle(file):
     if not alive_cells_on_board:
         return
 
-    xe = [x for x,_ in alive_cells_on_board]
-    ye = [y for _,y in alive_cells_on_board]
-    max_x, min_x = max(xe), min(xe)
-    max_y, min_y = max(ye), min(ye)
+    min_x, max_x, min_y, max_y = get_min_max_coords(alive_cells_on_board)
 
     width = max_x - min_x + 1
     height = max_y - min_y + 1
@@ -229,36 +273,20 @@ def load_rle(file):
 
         return new_alive
 
-    except (FileNotFoundError, json.JSONDecodeError, PermissionError):
+    except (FileNotFoundError, IsADirectoryError, PermissionError, IndexError):
+        print(f"Couldn't load the file: {file}")
         return set() # Else create a empty game state if none exists
     
 # Numpad hotkeys:
-def numpad_hotkeys(event):
+def numpad(event):
     global clipboard
     if event.type == pygame.KEYDOWN:
-        if event.key == pygame.K_KP0:
-            clipboard = load_rle("Numpad/glider.rle") # 0 Hotkey Numpad (change if you want a different rle file)
-        if event.key == pygame.K_KP1:
-            clipboard = load_rle("Numpad/gosper_glider_gun.rle") # 1 Hotkey Numpad (change if you want a different rle file)
-        if event.key == pygame.K_KP2:
-            clipboard = load_rle("Numpad/eater.rle") # 2 Hotkey Numpad (change if you want a different rle file)
-        if event.key == pygame.K_KP3:
-            clipboard = load_rle("Numpad/") # 3 Hotkey Numpad (change if you want a different rle file)
-        if event.key == pygame.K_KP4:
-            clipboard = load_rle("Numpad/") # 4 Hotkey Numpad (change if you want a different rle file)
-        if event.key == pygame.K_KP5:
-            clipboard = load_rle("Numpad/") # 5 Hotkey Numpad (change if you want a different rle file)
-        if event.key == pygame.K_KP6:
-            clipboard = load_rle("Numpad/") # 6 Hotkey Numpad (change if you want a different rle file)
-        if event.key == pygame.K_KP7:
-            clipboard = load_rle("Numpad/") # 7 Hotkey Numpad (change if you want a different rle file)
-        if event.key == pygame.K_KP8:
-            clipboard = load_rle("Numpad/") # 8 Hotkey Numpad (change if you want a different rle file)
-        if event.key == pygame.K_KP9:
-            clipboard = load_rle("Numpad/") # 9 Hotkey Numpad (change if you want a different rle file)
+        if event.key in NUMPAD_HOTKEYS:
+            file = NUMPAD_HOTKEYS[event.key]
+            clipboard = load_rle(file)
 
 # Draw the base grid
-def draw_grid(cell_size, line_width):
+def draw_grid(line_width):
     step = get_step()
     grid_width = max(1, int(line_width * zoom))
 
@@ -367,8 +395,6 @@ def draw_cells_from_grid():
     if current_grid is None:
         return
     step = get_step()
-    if step < 1:
-        step = 1
 
     grid_h, grid_w = current_grid.shape
 
@@ -397,12 +423,41 @@ def draw_cells_from_grid():
     screen_y = round((y_start + grid_offset_y) * step - camera_y)
     screen.blit(surf, (screen_x, screen_y))
 
-# The Copy/Paste/Drag thingys
-selecting = False
-has_selection = False
-start = None
-end = None
+# Helpy functions for rotate/drag
+def get_center_for(thing):
+    if not thing:
+        return (0, 0)
 
+    xs = [x for x, _ in thing]
+    ys = [y for _, y in thing]
+
+    center_x = round((min(xs) + max(xs)) / 2)
+    center_y = round((min(ys) + max(ys)) / 2)
+
+    return (center_x, center_y)
+
+def rotate_cells(thing, clockwise=True): # rotate around da center
+    if not thing:
+        return set()
+
+    center_x, center_y = get_center_for(thing)
+
+    if clockwise:
+        return {((y - center_y) + center_x, (-x + center_x) + center_y) for (x, y) in thing}
+    else:
+        return {((-y + center_y) + center_x, (x - center_x) + center_y) for (x, y) in thing}
+
+def mirror_cells(thing, x_axis=True): # mirror around the center
+    if not thing:
+        return set()
+
+    center_x, center_y = get_center_for(thing)
+
+    if x_axis:
+        return {(2 * center_x - x, y) for (x, y) in thing}
+    else:
+        return {(x, 2 * center_y - y) for (x, y) in thing}
+    
 def select_field(event):
     global selecting, has_selection, dragging_selection, start, end, alive_selected_cells, clipboard, start_drag_selection, was_active_before_edit, active, original_selected_cells, needs_sync
     if event.type == pygame.MOUSEBUTTONDOWN:
@@ -464,76 +519,27 @@ def select_field(event):
 
         if event.key == pygame.K_e:
             if dragging_selection and alive_selected_cells: # Rotate the drag | CW
-                xs = [x for x, _ in alive_selected_cells]
-                ys = [y for _, y in alive_selected_cells]
-                center_x = round((min(xs) + max(xs)) / 2)
-                center_y = round((min(ys) + max(ys)) / 2)
-                alive_selected_cells = {
-                    ((y - center_y) + center_x, (-x + center_x) + center_y)
-                    for (x, y) in alive_selected_cells
-                }
+                alive_selected_cells = rotate_cells(alive_selected_cells, clockwise=True)
             elif clipboard: # Rotate the Copy to Paste | CW
-                xs = [x for x, _ in clipboard]
-                ys = [y for _, y in clipboard]
-                center_x = round((min(xs) + max(xs)) / 2)
-                center_y = round((min(ys) + max(ys)) / 2)
-                clipboard = {
-                    ((y - center_y) + center_x, (-x + center_x) + center_y)
-                    for (x, y) in clipboard
-                }
+                clipboard = rotate_cells(clipboard, clockwise=True)
 
         if event.key == pygame.K_q:
             if dragging_selection and alive_selected_cells: # Rotate the drag | CCW
-                xs = [x for x, _ in alive_selected_cells]
-                ys = [y for _, y in alive_selected_cells]
-                center_x = round((min(xs) + max(xs)) / 2)
-                center_y = round((min(ys) + max(ys)) / 2)
-                alive_selected_cells = {
-                    ((-y + center_y) + center_x, (x - center_x) + center_y)
-                    for (x, y) in alive_selected_cells
-                }
+                alive_selected_cells = rotate_cells(alive_selected_cells, clockwise=False)
             elif clipboard: # Rotate the Copy to Paste | CCW
-                xs = [x for x, _ in clipboard]
-                ys = [y for _, y in clipboard]
-                center_x = round((min(xs) + max(xs)) / 2)
-                center_y = round((min(ys) + max(ys)) / 2)
-                clipboard = {
-                    ((-y + center_y) + center_x, (x - center_x) + center_y)
-                    for (x, y) in clipboard
-                }
+                clipboard = rotate_cells(clipboard, clockwise=False)
 
         if event.key == pygame.K_w:
             if dragging_selection and alive_selected_cells: # Mirror the drag left right
-                xs = [x for x, _ in alive_selected_cells]
-                center_x = round((min(xs) + max(xs)) / 2)
-                alive_selected_cells = {
-                    (2 * center_x - x, y)
-                    for (x, y) in alive_selected_cells
-                }
+                alive_selected_cells = mirror_cells(alive_selected_cells, x_axis=False)
             elif clipboard: # Mirror the Copy to Paste left right
-                xs = [x for x, _ in clipboard]
-                center_x = round((min(xs) + max(xs)) / 2)
-                clipboard = {
-                    (2 * center_x - x, y)
-                    for (x, y) in clipboard
-                }
+                clipboard = mirror_cells(clipboard, x_axis=False)
 
         if event.key == pygame.K_2:
             if dragging_selection and alive_selected_cells: # Mirror the drag up down
-                ys = [y for _, y in alive_selected_cells]
-                center_y = round((min(ys) + max(ys)) / 2)
-                alive_selected_cells = {
-                    (x, 2 * center_y - y)
-                    for (x, y) in alive_selected_cells            
-                }
+                alive_selected_cells = mirror_cells(alive_selected_cells, x_axis=True)
             elif clipboard: # Mirror the Copy to Paste up down
-                ys = [y for _, y in clipboard]
-                center_y = round((min(ys) + max(ys)) / 2)
-                clipboard = {
-                    (x, 2 * center_y - y)
-                    for (x, y) in clipboard
-                }
-    
+                clipboard = mirror_cells(clipboard, x_axis=True)
 
 # draw the select rect with start(x,y) and end(x,y)
 def draw_selection():
@@ -613,6 +619,43 @@ def draw_drag_preview():
             fill_surface = pygame.Surface((round(step), round(step)), pygame.SRCALPHA)
             fill_surface.fill((255, 255, 0, 80))
             screen.blit(fill_surface, (round(new_x*step - camera_x), round(new_y*step - camera_y)))
+
+def history_1_step(): # update history if 1 single step
+    global history, redo_history
+    history.append((gen, frozenset(alive_cells_on_board)))
+    redo_history.clear()
+
+def history_undo(): # update history if undo
+    global history, redo_history, gen, alive_cells_on_board, needs_sync
+    if history:
+        redo_history.append((gen, frozenset(alive_cells_on_board)))
+        gen, state = history.pop()
+        alive_cells_on_board = set(state)
+        needs_sync = True
+
+def history_redo(): # update history if redo
+    global history, redo_history, gen, alive_cells_on_board, needs_sync
+    if redo_history:
+        history.append((gen, frozenset(alive_cells_on_board)))
+        gen, state = redo_history.pop()
+        alive_cells_on_board = set(state)
+        needs_sync = True
+
+def manage_history(action):
+    global gen, history, redo_history, needs_sync
+    if action == "step":
+        if gen % HISTORY_SAVE_EVERY_GEN == 0:  # Save history every 10 generations
+            history_1_step()
+        gen += 1
+    elif action == "undo":
+        history_undo()
+    elif action == "redo":
+        history_redo()
+    elif action == "reset":
+        history.clear()
+        redo_history.clear()
+        gen = 0
+        needs_sync = True
     
 # Print the Controls + Intro
 print("Welcome to GoL:\n")
@@ -657,12 +700,11 @@ while game_running:
             if event.key == pygame.K_SPACE and not has_selection and not selecting and not dragging_selection:
                 active = not active
             if event.key == pygame.K_s: # Save
-                save_rle("RLE/game.rle") # Change if you want a different filename for the saved .rle 
+                save_rle(SAVING_FILE) # Change if you want a different filename for the saved .rle
                 print("Saved .rle!")
             if event.key == pygame.K_l: # Load
-                alive_cells_on_board = load_rle("RLE/replicator.rle") # Change if you want a different loaded .rle file
-                needs_sync = True
-                gen = 0
+                alive_cells_on_board = load_rle(LOADING_FILE) # Change if you want a different loaded .rle file
+                manage_history("reset")
                 center_cam()
                 print("Loaded .rle!")
                 if has_selection or selecting or dragging_selection:
@@ -671,55 +713,36 @@ while game_running:
                     dragging_selection = False
                     active = was_active_before_edit
             if event.key == pygame.K_n and not active and not has_selection and not selecting and not dragging_selection: # +1 Step
-                history.append(frozenset(alive_cells_on_board))
-                redo_history.clear()
-                gen += 1
+                manage_history("step")
                 numpy_update()
-                if cam_in_center:
+                if cam_in_center and gen % CAM_CENTER_EVERY_GEN == 0: # Only center cam every CAM_CENTER_EVERY_GEN for performance
                     center_cam()
             if event.key == pygame.K_r: # Clear / Reset
                 alive_cells_on_board.clear()
-                needs_sync = True
-                gen = 0
-                history.clear()
-                redo_history.clear()
+                manage_history("reset")
                 if has_selection or selecting or dragging_selection:
                     has_selection = False
                     selecting = False
                     dragging_selection = False
                     active = was_active_before_edit
 
-            if event.key == pygame.K_z and event.mod & pygame.KMOD_CTRL: # Undo by 1 on ctrl + z press 
-                if history:
-                    redo_history.append(frozenset(alive_cells_on_board))
-                    alive_cells_on_board = set(history.pop())
-                    needs_sync = True
-                    gen = max(0, gen - 1)
+            if event.key == pygame.K_z and event.mod & pygame.KMOD_CTRL: # Undo by 1 History step (1 * HISTORY_SAVE_EVERY_GEN) on ctrl + z press 
+                manage_history("undo")
 
-            if event.key == pygame.K_u and event.mod & pygame.KMOD_CTRL: # Undo by 10 on ctrl + u press 
+            if event.key == pygame.K_u and event.mod & pygame.KMOD_CTRL: # Undo by 10 History steps (10 * HISTORY_SAVE_EVERY_GEN) on ctrl + u press
                 steps = min(10, len(history))
 
                 for _ in range(steps):
-                    redo_history.append(frozenset(alive_cells_on_board))
-                    alive_cells_on_board = set(history.pop())
-                    needs_sync = True
-                    gen = max(0, gen - 1)
+                    manage_history("undo")
 
-            if event.key == pygame.K_y and event.mod & pygame.KMOD_CTRL: # Redo by 1 on ctrl + y press
-                if redo_history:
-                    history.append(frozenset(alive_cells_on_board))
-                    alive_cells_on_board = set(redo_history.pop())
-                    needs_sync = True
-                    gen += 1
+            if event.key == pygame.K_y and event.mod & pygame.KMOD_CTRL: # Redo by 1 History step (1 * HISTORY_SAVE_EVERY_GEN) on ctrl + y press
+                manage_history("redo")
 
-            if event.key == pygame.K_x and event.mod & pygame.KMOD_CTRL: # Redo by 10 on ctrl + x press
+            if event.key == pygame.K_x and event.mod & pygame.KMOD_CTRL: # Redo by 10 History steps (10 * HISTORY_SAVE_EVERY_GEN) on ctrl + x press
                 steps = min(10, len(redo_history))
 
                 for _ in range(steps):
-                    history.append(frozenset(alive_cells_on_board))
-                    alive_cells_on_board = set(redo_history.pop())
-                    needs_sync = True
-                    gen += 1
+                    manage_history("redo")
 
             if event.key == pygame.K_c and event.mod & pygame.KMOD_CTRL and not dragging_selection: # Copy
                 if has_selection:
@@ -775,28 +798,29 @@ while game_running:
             else:
                 zoom /= 1.1
 
-            zoom = max(0.055, min(10, zoom))
+            zoom = max(MIN_ZOOM, min(MAX_ZOOM, zoom))
 
             camera_x = world_x * zoom - mouse_x
             camera_y = world_y * zoom - mouse_y
 
         select_field(event)
-        numpad_hotkeys(event)
+        numpad(event)
 
     if needs_sync: # Syncs if manual changed before
         sync_grid_for_render()
         needs_sync = False
+
     draw_cells_from_grid() # draw each cell
 
     if show_preview: # Draw the preview if Toggled True
         draw_paste_preview()
 
-    draw_drag_preview()
+    draw_drag_preview() # Draw the drag preview if dragging selection
 
     if cell_size  * zoom >= 4:
-        draw_grid(cell_size, line_width) # draw board grid above
+        draw_grid(line_width) # draw board grid above
 
-    draw_selection()
+    draw_selection() # draw the selection rect (right click stuffy) if selecting or has selection
 
     GpS = update_speed(GpS, keys)
 
@@ -806,12 +830,10 @@ while game_running:
 
     while accumulator >= 1:
         if active:
-            history.append(frozenset(alive_cells_on_board))
-            redo_history.clear()
-            gen += 1
+            manage_history("step")
             numpy_update()
-            if cam_in_center:
-                    center_cam()
+            if cam_in_center and gen % CAM_CENTER_EVERY_GEN == 0: # Only center cam every CAM_CENTER_EVERY_GEN for performance
+                center_cam()
 
         accumulator -= 1
 
