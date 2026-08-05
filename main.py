@@ -1,8 +1,12 @@
+# Base Modules
 import pygame
 import math
 import numpy as np
 from collections import deque
-from scipy.signal import convolve2d
+import tkinter as tk
+
+# Own Modules
+import settings_window
 
 '''
 WHAT TO ADD:
@@ -13,13 +17,16 @@ WHAT TO ADD:
 '''
 '''
 WHAT TO FIX/OPTIMIZE:
-    1. save_rle -> Numpy vectors
-    2. history_1_step -> Save Deltas
-    3. center_cam -> Update for each add/remove cell instead of every CAM_CENTER_EVERY_GEN
-    4. Use State Enums
-    5. Use Modules instead of 1 big File
+    1. save_rle -> Numpy vectors (makes saving faster)
+    2. history_1_step -> Save Deltas (makes history faster)
+    3. center_cam -> Update for each add/remove cell instead of every CAM_CENTER_EVERY_GEN (makes it faster)
+    4. Use State Enums (makes it cleaner)
+    5. Use Modules instead of 1 big File (makes it cleaner)
+    6. grow_if_needed -> also shrink when pattern gets smaller (saves memory)
+    7. Cache preview/selection Surfaces instead of recreating every frame (makes it faster)
 '''
-# ---------------------------- Change freely for Hotkeys etc. ------------------------------
+
+# ---------------------------------- Change freely for Hotkeys etc. -------------------------------------
 NUMPAD_HOTKEYS = {
     pygame.K_KP0: "Numpad/glider.rle", # Hotkey Numpad 0
     pygame.K_KP1: "Numpad/gosper_glider_gun.rle", # Hotkey Numpad 1
@@ -32,36 +39,21 @@ NUMPAD_HOTKEYS = {
     pygame.K_KP8: "Numpad/", # Hotkey Numpad 8
     pygame.K_KP9: "Numpad/"  # Hotkey Numpad 9
 }
-LOADING_FILE = "RLE/replicator.rle" # Change if you want a different loaded .rle file
+LOADING_FILE = "RLE/rickroll_qr_code.rle" # Change if you want a different loaded .rle file
 SAVING_FILE = "RLE/game.rle" # Change if you want a different filename for the saved .rle
 
-WIDTH = 1000 # Game Window Width
-HEIGHT = 1000 # Game Window Height
+WIDTH = 1000 # Game Window Width | Base = 1000
+HEIGHT = 1000 # Game Window Height | Base = 1000
 
-MIN_ZOOM = 0.055 # Minimum Zoom Level
-MAX_ZOOM = 10.0 # Maximum Zoom Level
-CAM_CENTER_EVERY_GEN = 10 # Center the cam every X generations (for performance reasons)
+MIN_ZOOM = 0.055 # Minimum Zoom Level | Base = 0.055
+MAX_ZOOM = 10.0 # Maximum Zoom Level | Base = 10.0
+CAM_CENTER_EVERY_GEN = 10 # Center the cam every X generations (for performance reasons) | Base = 10
 
 HISTORY_LIMIT = 1000 # Limit of the Undo/Redo History
-HISTORY_SAVE_EVERY_GEN = 10 # Save history every X generations (for performance reasons)
-# -----------------------------------------------------------------------------------------
+HISTORY_SAVE_EVERY_GEN = 10 # Save history every X generations (for performance reasons) | Base = 10
 
-# Catch Birth / Survive Values
-print("\nPlease tell us the rules (just type the numbers like '23' or '357') (Input the num '9' if it should be empty)")
-birth_input = input("  How many cells does a cell need to be born?\n")
-survive_input = input("  How many cells does a cell need to survive?\n")
-
-# Birth Things
-birth_values = {int(char) for char in birth_input if char.isdigit()} if birth_input else {3} # Base GoL B
-birth_values = birth_values if birth_values != set() else {3}
-birth_values.discard(9)
-
-# Survive Things duh
-survive_values = {int(char) for char in survive_input if char.isdigit()} if survive_input else {2, 3} # Base GoL S
-survive_values = survive_values if survive_values != set() else {2, 3}
-survive_values.discard(9)
-
-print(f"Birth: {birth_values} | Survive: {survive_values}")
+GROWTH_MARGIN = 50 # The margin around the alive cells to determine the simulation grid size | Base = 50 
+# ------------------------------------------------------------------------------------------------------
 
 # Create Game Window + Base Values / Setup
 pygame.init()
@@ -95,6 +87,12 @@ grid_offset_x = 0
 grid_offset_y = 0
 needs_sync = False
 
+# Simulation Grid thingyyyys :333
+sim_grid = None
+sim_offset_x = 0
+sim_offset_y = 0
+set_is_old = False
+
 # Copy/Paste Tuffies
 alive_selected_cells = set()
 clipboard = set()
@@ -113,6 +111,18 @@ selecting = False
 has_selection = False
 start = None
 end = None
+
+# Base birth values
+birth_values = {3}
+survive_values = {2, 3}
+
+# Settings Window function to apply new rules from the settings window
+def apply_new_rules(birth, survive):
+    global birth_values, survive_values
+    birth_values = birth
+    survive_values = survive
+
+settings_root = settings_window.create_settings_window(apply_new_rules) # create the root with the window
 
 # Update the GpS on Key Input
 def update_speed(GpS, keys):
@@ -162,6 +172,8 @@ def get_mouse_world_pos():
 
 # Center the cam so you can see every cell 
 def center_cam():
+    make_set_synced()
+
     if not alive_cells_on_board: # If everything is dead do nothing
         return
 
@@ -225,7 +237,7 @@ def save_rle(file):
 # Load the rle file with "l"
 def load_rle(file):
     try:
-        global alive_cells_on_board, gen, birth_values, survive_values
+        global birth_values, survive_values
 
         new_alive = set()
         x, y = 0, 0
@@ -309,7 +321,8 @@ def draw_grid(line_width):
 # Toggle alive/dead on click
 def click_cell():
     global has_selection, dragging_selection, start_drag_selection, was_active_before_edit, active, original_selected_cells
-    
+    make_set_synced()
+
     x, y = get_mouse_world_pos()
 
     if has_selection and not point_in_selection(x,y):
@@ -350,13 +363,18 @@ def cells_to_array(alive_cells, padding=1):
     
     return grid, x_min - padding, y_min - padding
 
-# Update the Neighbors using the Numpy array
-KERNEL = np.array([[1,1,1],
-                   [1,0,1],
-                   [1,1,1]]) 
+# Setup Neighbor roll with a dictionary for customablity)
+
+# Update the Neighbors using the Numpy roll
+def count_neighbors(grid):
+    n = np.zeros_like(grid, dtype=np.uint8)
+    offsets = settings_window.give_neighbor_offsets()
+    for dx, dy in offsets:
+        n += np.roll(np.roll(grid, dy, axis=0), dx, axis=1)
+    return n    
 
 def array_update(grid, birth_values, survive_values):
-    neighbor_count = convolve2d(grid, KERNEL, mode='same', boundary='fill', fillvalue=0)
+    neighbor_count = count_neighbors(grid)
 
     birth_mask = np.isin(neighbor_count, list(birth_values)) & (grid == 0)
     survive_mask = np.isin(neighbor_count, list(survive_values)) & (grid == 1)
@@ -370,25 +388,57 @@ def array_to_cells(grid, offset_x, offset_y):
     ys = ys + offset_y
     return set(zip(xs.tolist(), ys.tolist()))
 
+# Sync the set with the grid (if it needs to lol)
+def make_set_synced():
+    global alive_cells_on_board, set_is_old
+    if set_is_old: # If its old update
+        if sim_grid is not None:
+            alive_cells_on_board = array_to_cells(sim_grid, sim_offset_x, sim_offset_y)
+        else:
+            alive_cells_on_board = set()
+        set_is_old = False
+
+# Update the sizes with margin if needed
+def grow_if_needed(grid, offset_x, offset_y):
+    h, w = grid.shape
+    edge_alive = (
+        grid[0:2, :].any() or # Top edge
+        grid[-2:, :].any() or # Bottom edge
+        grid[:, 0:2].any() or # Left edge
+        grid[:, -2:].any()    # Right edge
+    )
+    if not edge_alive:
+        return grid, offset_x, offset_y
+
+    new_h, new_w = h + GROWTH_MARGIN * 2, w + GROWTH_MARGIN * 2
+    new_grid = np.zeros((new_h, new_w), dtype=np.uint8)
+    new_grid[GROWTH_MARGIN:GROWTH_MARGIN + h, GROWTH_MARGIN:GROWTH_MARGIN + w] = grid
+    return new_grid, offset_x - GROWTH_MARGIN, offset_y - GROWTH_MARGIN
+
 # Sync the grid
-def sync_grid_for_render():
-    global current_grid, grid_offset_x, grid_offset_y
-    grid, offset_x, offset_y = cells_to_array(alive_cells_on_board, padding=0)
-    current_grid = grid
-    grid_offset_x, grid_offset_y = offset_x, offset_y
-
-# THE ENTIER UPDATE CELLS (just with fast numpy now)
-def numpy_update():
-    global birth_values, survive_values, alive_cells_on_board, current_grid, grid_offset_x, grid_offset_y
+def sync_grid_from_set():
+    global sim_grid, sim_offset_x, sim_offset_y, current_grid, grid_offset_x, grid_offset_y, set_is_old
     grid, offset_x, offset_y = cells_to_array(alive_cells_on_board, padding=1)
-
-    if grid is None:
-        return  # do nuthing if nuthing there
-    
-    grid = array_update(grid, birth_values, survive_values)
+    sim_grid = grid
+    sim_offset_x, sim_offset_y = offset_x, offset_y
     current_grid = grid
     grid_offset_x, grid_offset_y = offset_x, offset_y
-    alive_cells_on_board = array_to_cells(grid, offset_x, offset_y)
+    set_is_old = False
+
+# THE ENTIER UPDATE CELLS (just with fast numpy now + faster)
+def numpy_update():
+    global sim_grid, sim_offset_x, sim_offset_y, set_is_old, current_grid, grid_offset_x, grid_offset_y
+
+    if sim_grid is None:
+        return # do nuthing if nuthing there
+
+    sim_grid, sim_offset_x, sim_offset_y = grow_if_needed(sim_grid, sim_offset_x, sim_offset_y)
+    sim_grid = array_update(sim_grid, birth_values, survive_values)
+
+    current_grid = sim_grid
+    grid_offset_x, grid_offset_y = sim_offset_x, sim_offset_y
+
+    set_is_old = True
 
 # Fast Numpy Draw cells (one big image not many smoll images)
 def draw_cells_from_grid():
@@ -416,7 +466,8 @@ def draw_cells_from_grid():
     visible_grid = current_grid[y_start:y_end, x_start:x_end]
 
     scaled = np.kron(visible_grid, np.ones((step, step), dtype=np.uint8))
-    rgb = np.stack([scaled*255, scaled*255, np.zeros_like(scaled)], axis=-1)
+    cell_color = settings_window.give_cell_color()  # Get the current cell color from settings
+    rgb = np.stack([scaled*cell_color[0], scaled*cell_color[1], scaled*cell_color[2]], axis=-1)
 
     surf = pygame.surfarray.make_surface(rgb.swapaxes(0,1))
     screen_x = round((x_start + grid_offset_x) * step - camera_x)
@@ -472,6 +523,7 @@ def select_field(event):
             active = False
 
     if event.type == pygame.MOUSEBUTTONUP:
+        make_set_synced()
         if event.button == 3: # Stop Selecting
             selecting = False
             has_selection = True
@@ -507,7 +559,7 @@ def select_field(event):
             end = (x,y)
 
     if event.type == pygame.KEYDOWN:
-        if has_selection and event.key == pygame.K_d: # Delete Selected
+        if has_selection and event.key == pygame.K_BACKSPACE: # Delete Selected
             x_min = min(start[0], end[0])
             y_min = min(start[1], end[1])
             for (dx, dy) in original_selected_cells if dragging_selection else alive_selected_cells:
@@ -574,6 +626,7 @@ def point_in_selection(x,y):
 
 # Get every alive cell in rect
 def get_selection():
+    make_set_synced()
     x_min = min(start[0], end[0])
     y_min = min(start[1], end[1])
     
@@ -581,6 +634,7 @@ def get_selection():
 
 # Paste the clipboard
 def paste_cells():
+    make_set_synced()
     x, y = get_mouse_world_pos()
 
     cordinates_clipboard = {(dx + x, dy + y) for (dx, dy) in clipboard}
@@ -596,7 +650,9 @@ def draw_paste_preview():
 
     for dx, dy in preview_cells:
         fill_surface = pygame.Surface((round(step), round(step)), pygame.SRCALPHA)
-        fill_surface.fill((255, 255, 0, 80))  # RGBA
+        cell_color_rgb = settings_window.give_cell_color()
+        cell_color_rgba = (*cell_color_rgb, 80)
+        fill_surface.fill(cell_color_rgba)  # RGBA color_hex
         
         screen.blit(fill_surface, (round(dx*step - camera_x), round(dy*step - camera_y)))
 
@@ -617,11 +673,14 @@ def draw_drag_preview():
             new_y = absolute_y + delta_y
 
             fill_surface = pygame.Surface((round(step), round(step)), pygame.SRCALPHA)
-            fill_surface.fill((255, 255, 0, 80))
+            cell_color_rgb = settings_window.give_cell_color()
+            cell_color_rgba = (*cell_color_rgb, 80)
+            fill_surface.fill(cell_color_rgba)  # RGBA color_hex
             screen.blit(fill_surface, (round(new_x*step - camera_x), round(new_y*step - camera_y)))
 
 def history_1_step(): # update history if 1 single step
     global history, redo_history
+    make_set_synced()
     history.append((gen, frozenset(alive_cells_on_board)))
     redo_history.clear()
 
@@ -671,7 +730,7 @@ print("  'e'                    = Turn CW")
 print("  'q'                    = Turn CCW")
 print("  'w'                    = Mirror left right")
 print("  '2'                    = Mirror up down")
-print("  'd + Selected'         = Delete")
+print("  'Backspace + Selected' = Delete")
 print("  'Right'                = +1 GpS")
 print("  'Up'                   = +10 GpS")
 print("  'Left'                 = -1 GpS")
@@ -688,6 +747,12 @@ print("  'Hold MouseWheel'      = Move cam\n")
 
 # Start of Game
 while game_running:
+
+    try:
+        settings_root.update()
+    except tk.TclError:
+        pass
+
     keys = pygame.key.get_pressed() # Setup the key events
 
     screen.fill((0, 0, 0)) # Make everything black
@@ -700,10 +765,13 @@ while game_running:
             if event.key == pygame.K_SPACE and not has_selection and not selecting and not dragging_selection:
                 active = not active
             if event.key == pygame.K_s: # Save
-                save_rle(SAVING_FILE) # Change if you want a different filename for the saved .rle
+                make_set_synced()
+                save_rle(SAVING_FILE)
                 print("Saved .rle!")
             if event.key == pygame.K_l: # Load
-                alive_cells_on_board = load_rle(LOADING_FILE) # Change if you want a different loaded .rle file
+                alive_cells_on_board = load_rle(LOADING_FILE) 
+                set_is_old = False
+                make_set_synced()
                 manage_history("reset")
                 center_cam()
                 print("Loaded .rle!")
@@ -719,6 +787,8 @@ while game_running:
                     center_cam()
             if event.key == pygame.K_r: # Clear / Reset
                 alive_cells_on_board.clear()
+                set_is_old = False
+                make_set_synced()
                 manage_history("reset")
                 if has_selection or selecting or dragging_selection:
                     has_selection = False
@@ -807,7 +877,7 @@ while game_running:
         numpad(event)
 
     if needs_sync: # Syncs if manual changed before
-        sync_grid_for_render()
+        sync_grid_from_set()
         needs_sync = False
 
     draw_cells_from_grid() # draw each cell
@@ -829,6 +899,7 @@ while game_running:
     accumulator = min(accumulator, 10)
 
     while accumulator >= 1:
+        pygame.event.pump()
         if active:
             manage_history("step")
             numpy_update()
@@ -839,7 +910,7 @@ while game_running:
 
     birth_str = "".join(str(n) for n in sorted(birth_values))
     survive_str = "".join(str(n) for n in sorted(survive_values))
-    pygame.display.set_caption(f"Rule = B{birth_str}/S{survive_str} | Gen = {gen} | Alive={len(alive_cells_on_board)} | GpS = {GpS} | FPS = {clock.get_fps():.1f} | Running = {active} | Cam centered = {cam_in_center} | Show Preview = {show_preview}") # Update Data
+    pygame.display.set_caption(f"Rule = B{birth_str}/S{survive_str} | Gen = {gen} | Alive={int(sim_grid.sum()) if sim_grid is not None else 0} | GpS = {GpS} | FPS = {clock.get_fps():.1f} | Running = {active} | Cam centered = {cam_in_center} | Show Preview = {show_preview}") # Update Data
     pygame.display.flip()
 
 pygame.quit()
