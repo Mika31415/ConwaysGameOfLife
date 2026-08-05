@@ -65,6 +65,18 @@ def create_settings_window(on_apply_callback, initial_birth="3", initial_survive
     color_entry.insert(0, initial_color)  # Default color is yellow
     color_entry.pack(pady=5, padx=20, fill="x")
 
+    # Update color error
+    def update_color_error(event=None):
+        cell_color = color_entry.get().strip()
+        is_valid_hex = (
+            (cell_color.startswith("#") and len(cell_color) == 7 and all(c.upper() in hex_chars for c in cell_color[1:]))
+            or
+            (len(cell_color) == 6 and all(c.upper() in hex_chars for c in cell_color))
+        )
+        color_entry.configure(highlightbackground=THEME["border"] if is_valid_hex else THEME["error"])
+
+    color_entry.bind("<KeyRelease>", update_color_error)
+
     # Neighbor settings
     tk.Label(root, text="Counting Neighbors:", bg=THEME["bg"], fg=THEME["fg_dim"]).pack(pady=(10, 0))
     # add 3x3 grid of clickable cells (the middle cell is not clickable + dark) to select which neighbors to count
