@@ -6,7 +6,7 @@ from collections import deque
 import tkinter as tk
 
 # Own Modules
-import settings_window
+import modules.ux.settings_window as settings_window
 
 '''
 WHAT TO ADD:
@@ -28,18 +28,18 @@ WHAT TO FIX/OPTIMIZE:
 
 # ---------------------------------- Change freely for Hotkeys etc. -------------------------------------
 NUMPAD_HOTKEYS = {
-    pygame.K_KP0: "Numpad/glider.rle", # Hotkey Numpad 0
-    pygame.K_KP1: "Numpad/gosper_glider_gun.rle", # Hotkey Numpad 1
-    pygame.K_KP2: "Numpad/eater.rle", # Hotkey Numpad 2
-    pygame.K_KP3: "Numpad/", # Hotkey Numpad 3
-    pygame.K_KP4: "Numpad/", # Hotkey Numpad 4
-    pygame.K_KP5: "Numpad/", # Hotkey Numpad 5
-    pygame.K_KP6: "Numpad/", # Hotkey Numpad 6
-    pygame.K_KP7: "Numpad/", # Hotkey Numpad 7
-    pygame.K_KP8: "Numpad/", # Hotkey Numpad 8
+    pygame.K_KP0: "Numpad/gosper_glider_gun.rle", # Hotkey Numpad 0
+    pygame.K_KP1: "Numpad/eater.rle", # Hotkey Numpad 1
+    pygame.K_KP2: "Numpad/buckaroo.rle", # Hotkey Numpad 2
+    pygame.K_KP3: "Numpad/60p_glider_gun.rle", # Hotkey Numpad 3
+    pygame.K_KP4: "Numpad/60p_and_gate.rle", # Hotkey Numpad 4
+    pygame.K_KP5: "Numpad/60p_not_gate.rle", # Hotkey Numpad 5
+    pygame.K_KP6: "Numpad/60p_or_gate.rle", # Hotkey Numpad 6
+    pygame.K_KP7: "Numpad/duplicator.rle", # Hotkey Numpad 7
+    pygame.K_KP8: "Numpad/60p_xor_gate.rle", # Hotkey Numpad 8
     pygame.K_KP9: "Numpad/"  # Hotkey Numpad 9
 }
-LOADING_FILE = "RLE/rickroll_qr_code.rle" # Change if you want a different loaded .rle file
+LOADING_FILE = "RLE/OCTA.rle" # Change if you want a different loaded .rle file
 SAVING_FILE = "RLE/game.rle" # Change if you want a different filename for the saved .rle
 
 WIDTH = 1000 # Game Window Width | Base = 1000
@@ -122,7 +122,7 @@ def apply_new_rules(birth, survive):
     birth_values = birth
     survive_values = survive
 
-settings_root = settings_window.create_settings_window(apply_new_rules) # create the root with the window
+settings_root = settings_window.create_settings_window(apply_new_rules) # create the root with the settings window
 
 # Update the GpS on Key Input
 def update_speed(GpS, keys):
@@ -769,9 +769,9 @@ while game_running:
                 save_rle(SAVING_FILE)
                 print("Saved .rle!")
             if event.key == pygame.K_l: # Load
-                alive_cells_on_board = load_rle(LOADING_FILE) 
                 set_is_old = False
                 make_set_synced()
+                alive_cells_on_board = load_rle(LOADING_FILE) 
                 manage_history("reset")
                 center_cam()
                 print("Loaded .rle!")
