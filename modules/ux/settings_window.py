@@ -30,7 +30,7 @@ def give_cell_color():
     cell_color_rgb = tuple(int(cell_color_hex[i:i+2], 16) for i in (1, 3, 5))
     return cell_color_rgb
 
-def create_settings_window(on_apply_callback, initial_birth="3", initial_survive="23", initial_color="#FFFF00"):
+def create_settings_window(on_apply_callback, initial_birth="3", initial_survive="23", initial_color=DEFAULT_COLOR):
     global neighbor_state, buttons
     # Base window
     root = tk.Tk()

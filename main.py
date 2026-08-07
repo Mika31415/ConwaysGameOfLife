@@ -39,7 +39,7 @@ NUMPAD_HOTKEYS = {
     pygame.K_KP8: "Numpad/60p_xor_gate.rle", # Hotkey Numpad 8
     pygame.K_KP9: "Numpad/"  # Hotkey Numpad 9
 }
-LOADING_FILE = "RLE/OCTA.rle" # Change if you want a different loaded .rle file
+LOADING_FILE = "RLE/save.rle" # Change if you want a different loaded .rle file
 SAVING_FILE = "RLE/game.rle" # Change if you want a different filename for the saved .rle
 
 WIDTH = 1000 # Game Window Width | Base = 1000
@@ -51,6 +51,8 @@ CAM_CENTER_EVERY_GEN = 10 # Center the cam every X generations (for performance 
 
 HISTORY_LIMIT = 1000 # Limit of the Undo/Redo History
 HISTORY_SAVE_EVERY_GEN = 10 # Save history every X generations (for performance reasons) | Base = 10
+
+SYNC_LIMIT = 1_000_000 # Skips syncing at X (stops MemoryError)
 
 GROWTH_MARGIN = 50 # The margin around the alive cells to determine the simulation grid size | Base = 50 
 # ------------------------------------------------------------------------------------------------------
@@ -172,18 +174,24 @@ def get_mouse_world_pos():
 
 # Center the cam so you can see every cell 
 def center_cam():
-    make_set_synced()
+    global zoom, camera_x, camera_y
+    synced = make_set_synced()
 
-    if not alive_cells_on_board: # If everything is dead do nothing
-        return
-
-    min_x, max_x, min_y, max_y = get_min_max_coords(alive_cells_on_board)
+    if synced:
+        if not alive_cells_on_board:
+            return
+        min_x, max_x, min_y, max_y = get_min_max_coords(alive_cells_on_board)
+    else: # Set to big -> get bounding box from numpy instead of the set
+        if sim_grid is None or not sim_grid.any():
+            return
+        ys, xs = np.nonzero(sim_grid)
+        min_x, max_x = int(xs.min()) + sim_offset_x, int(xs.max()) + sim_offset_x
+        min_y, max_y = int(ys.min()) + sim_offset_y, int(ys.max()) + sim_offset_y
 
     pattern_height = (max_y - min_y + 1) * cell_size
     pattern_width = (max_x - min_x + 1) * cell_size
 
-    global zoom, camera_x, camera_y
-    zoom = min(MAX_ZOOM, max(MIN_ZOOM, min(WIDTH / pattern_width, HEIGHT / pattern_height) * 0.9)) # Do zoom so it zooms good enough that everything shows + edge empty :3
+    zoom = min(MAX_ZOOM, max(MIN_ZOOM, min(WIDTH / pattern_width, HEIGHT / pattern_height) * 0.9))
 
     center_y = (min_y + max_y + 1) / 2 * cell_size
     center_x = (min_x + max_x + 1) / 2 * cell_size
@@ -193,8 +201,12 @@ def center_cam():
 
 # Save the game state with "s"
 def save_rle(file):
+    if not make_set_synced():
+        print(f"⚠ {int(sim_grid.sum())} alive cells | Too large to save directly (limit {SYNC_LIMIT})")
+        return False
+    
     if not alive_cells_on_board:
-        return
+        return False
 
     min_x, max_x, min_y, max_y = get_min_max_coords(alive_cells_on_board)
 
@@ -231,8 +243,10 @@ def save_rle(file):
             survive_str = "".join(str(n) for n in sorted(survive_values))
             f.write(f"x = {width}, y = {height}, rule = B{birth_str}/S{survive_str}\n")
             f.write(pattern_str + "\n")
+        return True
     except (OSError, PermissionError):
         print(f"Couldn't save the file: {file}")
+        return False
 
 # Load the rle file with "l"
 def load_rle(file):
@@ -321,24 +335,27 @@ def draw_grid(line_width):
 # Toggle alive/dead on click
 def click_cell():
     global has_selection, dragging_selection, start_drag_selection, was_active_before_edit, active, original_selected_cells
-    make_set_synced()
+    if not make_set_synced():
+        print(f"⚠ {int(sim_grid.sum())} alive cells | Too large to edit directly (limit {SYNC_LIMIT}).")
+        return False
 
     x, y = get_mouse_world_pos()
 
     if has_selection and not point_in_selection(x,y):
         has_selection = False
         active = was_active_before_edit
-        return
+        return False
     elif has_selection:
         dragging_selection = True
         start_drag_selection = (x,y)
         original_selected_cells = get_selection()
-        return
+        return False
 
     if (x,y) in alive_cells_on_board:
         alive_cells_on_board.discard((x,y))
     else:
         alive_cells_on_board.add((x,y))
+    return True
 
 # Turn Set in Numpy Array
 def cells_to_array(alive_cells, padding=1):
@@ -393,10 +410,15 @@ def make_set_synced():
     global alive_cells_on_board, set_is_old
     if set_is_old: # If its old update
         if sim_grid is not None:
+            count = int(sim_grid.sum())
+            if count > SYNC_LIMIT:
+                print(f"⚠ {count} alive cells | Skipped syncing (maximum cells {SYNC_LIMIT})")
+                return False
             alive_cells_on_board = array_to_cells(sim_grid, sim_offset_x, sim_offset_y)
         else:
             alive_cells_on_board = set()
         set_is_old = False
+    return True
 
 # Update the sizes with margin if needed
 def grow_if_needed(grid, offset_x, offset_y):
@@ -523,35 +545,38 @@ def select_field(event):
             active = False
 
     if event.type == pygame.MOUSEBUTTONUP:
-        make_set_synced()
+        synced = make_set_synced()
         if event.button == 3: # Stop Selecting
             selecting = False
-            has_selection = True
-            alive_selected_cells = get_selection()
+            if synced:
+                has_selection = True
+                alive_selected_cells = get_selection()
+            else:
+                print(f"⚠ {int(sim_grid.sum())} alive cells | Too large to select directly (limit {SYNC_LIMIT})")
+                has_selection = False
+                active = was_active_before_edit
         if dragging_selection and event.button == 1: # Stop Drag
             dragging_selection = False
             has_selection = False
-            x_min = min(start[0], end[0])
-            y_min = min(start[1], end[1])
-            x, y = get_mouse_world_pos()
-            delta_x = x - start_drag_selection[0]
-            delta_y = y - start_drag_selection[1]
+            if not synced:
+                print(f"⚠ {int(sim_grid.sum())} alive cells | Too large to drop directly (limit {SYNC_LIMIT})")
+                active = was_active_before_edit
+            else:
+                x_min = min(start[0], end[0])
+                y_min = min(start[1], end[1])
+                x, y = get_mouse_world_pos()
+                delta_x = x - start_drag_selection[0]
+                delta_y = y - start_drag_selection[1]
 
-            old_positions = {
-                (dx + x_min, dy + y_min)
-                for (dx, dy) in original_selected_cells
-            }
+                old_positions = {(dx + x_min, dy + y_min) for (dx, dy) in original_selected_cells}
+                new_positions = {(dx + x_min + delta_x, dy + y_min + delta_y) for (dx, dy) in alive_selected_cells}
 
-            new_positions = {
-                (dx + x_min + delta_x, dy + y_min + delta_y)
-                for (dx, dy) in alive_selected_cells
-            }
+                alive_cells_on_board.difference_update(old_positions)
+                alive_cells_on_board.update(new_positions)
 
-            alive_cells_on_board.difference_update(old_positions)
-            alive_cells_on_board.update(new_positions)
-
-            active = was_active_before_edit
-            needs_sync = True
+                active = was_active_before_edit
+                needs_sync = True
+                redo_history.clear()
 
     if event.type == pygame.MOUSEMOTION:
         if selecting: # while you hold rightclick select duh
@@ -568,6 +593,7 @@ def select_field(event):
             has_selection = False
             active = was_active_before_edit
             needs_sync = True
+            redo_history.clear()
 
         if event.key == pygame.K_e:
             if dragging_selection and alive_selected_cells: # Rotate the drag | CW
@@ -634,12 +660,14 @@ def get_selection():
 
 # Paste the clipboard
 def paste_cells():
-    make_set_synced()
+    if not make_set_synced():
+        print("⚠ Board too large to paste into directly.")
+        return False
+    
     x, y = get_mouse_world_pos()
-
     cordinates_clipboard = {(dx + x, dy + y) for (dx, dy) in clipboard}
-
     alive_cells_on_board.update(cordinates_clipboard)
+    return True
 
 # Draw a lil preview where/what you will paste
 def draw_paste_preview():
@@ -680,25 +708,56 @@ def draw_drag_preview():
 
 def history_1_step(): # update history if 1 single step
     global history, redo_history
-    make_set_synced()
-    history.append((gen, frozenset(alive_cells_on_board)))
+    if sim_grid is not None:
+        packed = np.packbits(sim_grid)
+        history.append((gen, packed, sim_grid.shape, sim_offset_x, sim_offset_y))
+    else:
+        history.append((gen, None, (0, 0), 0, 0))
     redo_history.clear()
 
 def history_undo(): # update history if undo
-    global history, redo_history, gen, alive_cells_on_board, needs_sync
+    global history, redo_history, gen, sim_grid, sim_offset_x, sim_offset_y, current_grid, grid_offset_x, grid_offset_y, set_is_old, needs_sync
     if history:
-        redo_history.append((gen, frozenset(alive_cells_on_board)))
-        gen, state = history.pop()
-        alive_cells_on_board = set(state)
-        needs_sync = True
+        if sim_grid is not None:
+            packed_now = np.packbits(sim_grid)
+            redo_history.append((gen, packed_now, sim_grid.shape, sim_offset_x, sim_offset_y))
+        else:
+            redo_history.append((gen, None, (0, 0), 0, 0))
+
+        gen, packed, shape, ox, oy = history.pop()
+        if packed is not None:
+            h, w = shape
+            sim_grid = np.unpackbits(packed)[:h * w].reshape(shape)
+        else:
+            sim_grid = None
+
+        sim_offset_x, sim_offset_y = ox, oy
+        current_grid = sim_grid
+        grid_offset_x, grid_offset_y = ox, oy
+        set_is_old = True
+        needs_sync = False
 
 def history_redo(): # update history if redo
-    global history, redo_history, gen, alive_cells_on_board, needs_sync
+    global history, redo_history, gen, sim_grid, sim_offset_x, sim_offset_y, current_grid, grid_offset_x, grid_offset_y, set_is_old, needs_sync
     if redo_history:
-        history.append((gen, frozenset(alive_cells_on_board)))
-        gen, state = redo_history.pop()
-        alive_cells_on_board = set(state)
-        needs_sync = True
+        if sim_grid is not None:
+            packed_now = np.packbits(sim_grid)
+            history.append((gen, packed_now, sim_grid.shape, sim_offset_x, sim_offset_y))
+        else:
+            history.append((gen, None, (0, 0), 0, 0))
+
+        gen, packed, shape, ox, oy = redo_history.pop()
+        if packed is not None:
+            h, w = shape
+            sim_grid = np.unpackbits(packed)[:h * w].reshape(shape)
+        else:
+            sim_grid = None
+
+        sim_offset_x, sim_offset_y = ox, oy
+        current_grid = sim_grid
+        grid_offset_x, grid_offset_y = ox, oy
+        set_is_old = True
+        needs_sync = False
 
 def manage_history(action):
     global gen, history, redo_history, needs_sync
@@ -765,9 +824,8 @@ while game_running:
             if event.key == pygame.K_SPACE and not has_selection and not selecting and not dragging_selection:
                 active = not active
             if event.key == pygame.K_s: # Save
-                make_set_synced()
-                save_rle(SAVING_FILE)
-                print("Saved .rle!")
+                if save_rle(SAVING_FILE):
+                    print("Saved .rle!")
             if event.key == pygame.K_l: # Load
                 set_is_old = False
                 make_set_synced()
@@ -821,8 +879,9 @@ while game_running:
                     active = was_active_before_edit
 
             if event.key == pygame.K_v and event.mod & pygame.KMOD_CTRL and not has_selection and not selecting and not dragging_selection: # Paste
-                paste_cells()
-                needs_sync = True
+                if paste_cells():
+                    needs_sync = True
+                    redo_history.clear()
 
             if event.key == pygame.K_p:
                 show_preview = not show_preview
@@ -835,8 +894,9 @@ while game_running:
 
         if event.type == pygame.MOUSEBUTTONDOWN: # get click input and turn them into board pos + color them with board
             if event.button == 1:  # Leftclick
-                click_cell()
-                needs_sync = True
+                if click_cell():
+                    needs_sync = True
+                    redo_history.clear()
             if event.button == 2: # Middle Drag Cam
                 dragging = True
                 last_mouse_pos = pygame.mouse.get_pos()
