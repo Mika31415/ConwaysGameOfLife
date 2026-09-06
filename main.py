@@ -2,16 +2,19 @@
 import pygame
 import math
 import numpy as np
+import random
 from collections import deque
 import tkinter as tk
 
 # Own Modules
 import modules.ux.settings_window as settings_window
+import modules.simulation.chunk_grid as chunk_grid
 
+# Ma Todo List for the entier Project :3333
 '''
 WHAT TO ADD:
     1. Numpy Vectors (Done ig)
-    2. Chunk-System
+    2. Chunk-System NOOWOOWOWOOWOWOWOWWWWWWWWWWWWWWW!!!!! | ONLY HISTORY LEFT
     3. Multi-Threading/Processing
     4. HashLife
 '''
@@ -21,25 +24,24 @@ WHAT TO FIX/OPTIMIZE:
     2. history_1_step -> Save Deltas (makes history faster)
     3. center_cam -> Update for each add/remove cell instead of every CAM_CENTER_EVERY_GEN (makes it faster)
     4. Use State Enums (makes it cleaner)
-    5. Use Modules instead of 1 big File (makes it cleaner)
-    6. grow_if_needed -> also shrink when pattern gets smaller (saves memory)
-    7. Cache preview/selection Surfaces instead of recreating every frame (makes it faster)
+    5. Use Modules instead of 1 big File (makes it cleaner) | Done a bit
+    6. Cache preview/selection Surfaces instead of recreating every frame (makes it faster)
 '''
 
 # ---------------------------------- Change freely for Hotkeys etc. -------------------------------------
 NUMPAD_HOTKEYS = {
-    pygame.K_KP0: "Numpad/gosper_glider_gun.rle", # Hotkey Numpad 0
-    pygame.K_KP1: "Numpad/eater.rle", # Hotkey Numpad 1
-    pygame.K_KP2: "Numpad/buckaroo.rle", # Hotkey Numpad 2
-    pygame.K_KP3: "Numpad/60p_glider_gun.rle", # Hotkey Numpad 3
-    pygame.K_KP4: "Numpad/60p_and_gate.rle", # Hotkey Numpad 4
-    pygame.K_KP5: "Numpad/60p_not_gate.rle", # Hotkey Numpad 5
-    pygame.K_KP6: "Numpad/60p_or_gate.rle", # Hotkey Numpad 6
-    pygame.K_KP7: "Numpad/duplicator.rle", # Hotkey Numpad 7
-    pygame.K_KP8: "Numpad/60p_xor_gate.rle", # Hotkey Numpad 8
-    pygame.K_KP9: "Numpad/"  # Hotkey Numpad 9
+    pygame.K_1: "Numpad/gosper_glider_gun.rle", # Hotkey Numpad 1
+    pygame.K_2: "Numpad/eater.rle", # Hotkey Numpad 2
+    pygame.K_3: "Numpad/buckaroo.rle", # Hotkey Numpad 3
+    pygame.K_4: "Numpad/60p_glider_gun.rle", # Hotkey Numpad 4
+    pygame.K_5: "Numpad/60p_and_gate.rle", # Hotkey Numpad 5
+    pygame.K_6: "Numpad/60p_not_gate.rle", # Hotkey Numpad 6
+    pygame.K_7: "Numpad/60p_or_gate.rle", # Hotkey Numpad 7
+    pygame.K_8: "Numpad/duplicator.rle", # Hotkey Numpad 8
+    pygame.K_9: "Numpad/60p_xor_gate.rle", # Hotkey Numpad 9
+    pygame.K_0: "Numpad/"  # Hotkey Numpad 0
 }
-LOADING_FILE = "RLE/save.rle" # Change if you want a different loaded .rle file
+LOADING_FILE = "RLE/half_adder.rle" # Change if you want a different loaded .rle file
 SAVING_FILE = "RLE/game.rle" # Change if you want a different filename for the saved .rle
 
 WIDTH = 1000 # Game Window Width | Base = 1000
@@ -49,12 +51,8 @@ MIN_ZOOM = 0.055 # Minimum Zoom Level | Base = 0.055
 MAX_ZOOM = 10.0 # Maximum Zoom Level | Base = 10.0
 CAM_CENTER_EVERY_GEN = 10 # Center the cam every X generations (for performance reasons) | Base = 10
 
-HISTORY_LIMIT = 1000 # Limit of the Undo/Redo History
-HISTORY_SAVE_EVERY_GEN = 10 # Save history every X generations (for performance reasons) | Base = 10
-
-SYNC_LIMIT = 1_000_000 # Skips syncing at X (stops MemoryError)
-
-GROWTH_MARGIN = 50 # The margin around the alive cells to determine the simulation grid size | Base = 50 
+HISTORY_LIMIT = 10000 # Limit of the Undo/Redo History
+HISTORY_SAVE_EVERY_GEN = 10 # Save history every X generations (for performance reasons) | Base = 10 | In the Future 1
 # ------------------------------------------------------------------------------------------------------
 
 # Create Game Window + Base Values / Setup
@@ -76,30 +74,16 @@ camera_x = 0.0
 camera_y = 0.0
 zoom = 1.0
 dragging = False
-cam_in_center = False
 last_mouse_pos = (0, 0)
 
 # Grid/Cell shtuff
 line_width = 1
 cell_size = 10
 
-alive_cells_on_board = set()
-current_grid = None
-grid_offset_x = 0
-grid_offset_y = 0
-needs_sync = False
-
-# Simulation Grid thingyyyys :333
-sim_grid = None
-sim_offset_x = 0
-sim_offset_y = 0
-set_is_old = False
-
 # Copy/Paste Tuffies
 alive_selected_cells = set()
 clipboard = set()
 original_selected_cells = set()
-show_preview = False
 dragging_selection = False
 start_drag_selection = None
 was_active_before_edit = False
@@ -145,22 +129,10 @@ def update_speed(GpS, keys):
 
     return GpS
 
+# IN DA FUTURE MOVE THE 3 HELPY HELPERS HELP FUNCS IN A DIFFERENT MODULE / FILE
 # Another helpy func with gives the step num
 def get_step():
     return max(1, round(cell_size * zoom))
-
-# And another helpy func to calc the min/max cordinates of x and y of the alive cells
-def get_min_max_coords(cells):
-    if not cells:
-        return (0, 0, 0, 0)
-
-    xs = [x for x, _ in cells]
-    ys = [y for _, y in cells]
-
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
-
-    return (min_x, max_x, min_y, max_y)
 
 # A lil help function to get the mouse pos in world cordinates
 def get_mouse_world_pos():
@@ -172,21 +144,20 @@ def get_mouse_world_pos():
 
     return (x,y)
 
+def get_max_min_from_selection():
+    x_min, y_min = min(start[0], end[0]), min(start[1], end[1])
+    x_max, y_max = max(start[0], end[0]), max(start[1], end[1])
+    return (x_min, x_max, y_min, y_max)
+# YE THESE 3 FUNCS ABOVE IN THE DIFFERENT MODULE / FILE IN DA FUTURE 
+
 # Center the cam so you can see every cell 
 def center_cam():
     global zoom, camera_x, camera_y
-    synced = make_set_synced()
+    bbox = chunk_grid.global_bbox()
+    if not bbox:
+        return
 
-    if synced:
-        if not alive_cells_on_board:
-            return
-        min_x, max_x, min_y, max_y = get_min_max_coords(alive_cells_on_board)
-    else: # Set to big -> get bounding box from numpy instead of the set
-        if sim_grid is None or not sim_grid.any():
-            return
-        ys, xs = np.nonzero(sim_grid)
-        min_x, max_x = int(xs.min()) + sim_offset_x, int(xs.max()) + sim_offset_x
-        min_y, max_y = int(ys.min()) + sim_offset_y, int(ys.max()) + sim_offset_y
+    min_x, min_y, max_x, max_y  = bbox
 
     pattern_height = (max_y - min_y + 1) * cell_size
     pattern_width = (max_x - min_x + 1) * cell_size
@@ -199,16 +170,13 @@ def center_cam():
     camera_x = center_x * zoom - WIDTH / 2
     camera_y = center_y * zoom - HEIGHT / 2
 
-# Save the game state with "s"
+# Save the game state with "Ctrl + s"
 def save_rle(file):
-    if not make_set_synced():
-        print(f"⚠ {int(sim_grid.sum())} alive cells | Too large to save directly (limit {SYNC_LIMIT})")
-        return False
-    
-    if not alive_cells_on_board:
+    bbox = chunk_grid.global_bbox()
+    if not bbox: # If no alive cells on the board, don't save
         return False
 
-    min_x, max_x, min_y, max_y = get_min_max_coords(alive_cells_on_board)
+    min_x, min_y, max_x, max_y = bbox
 
     width = max_x - min_x + 1
     height = max_y - min_y + 1
@@ -220,7 +188,7 @@ def save_rle(file):
         run_count = 0
 
         for x in range(min_x, max_x + 1):
-            cell_char = "o" if (x, y) in alive_cells_on_board else "b"
+            cell_char = "o" if chunk_grid.get_cell(x, y) == 1 else "b"
 
             if cell_char == run_char:
                 run_count += 1
@@ -248,8 +216,8 @@ def save_rle(file):
         print(f"Couldn't save the file: {file}")
         return False
 
-# Load the rle file with "l"
-def load_rle(file):
+# Load the rle file with "Ctrl + l"
+def load_rle(file): # CHANGE 2
     try:
         global birth_values, survive_values
 
@@ -264,7 +232,7 @@ def load_rle(file):
             line = line.strip()
             if line.startswith("#"):
                 continue
-            if line.startswith("x"): # read the rules
+            if line.startswith("x"): # Read the rules
                 rules = line.split()[-1]
                 birth_rule_str = rules.split("/")[0]
                 survive_rule_str = rules.split("/")[1]
@@ -327,7 +295,7 @@ def draw_grid(line_width):
     start_y = int(camera_y // step) - 1
     end_y = int(start_y + HEIGHT // step + 2)
 
-    for y in range(start_y, end_y): # -
+    for y in range(start_y, end_y): # ⏤
         pos = round(y * step - camera_y)
 
         pygame.draw.line(screen, (20, 20, 20), (0, pos), (WIDTH, pos), grid_width)
@@ -335,9 +303,6 @@ def draw_grid(line_width):
 # Toggle alive/dead on click
 def click_cell():
     global has_selection, dragging_selection, start_drag_selection, was_active_before_edit, active, original_selected_cells
-    if not make_set_synced():
-        print(f"⚠ {int(sim_grid.sum())} alive cells | Too large to edit directly (limit {SYNC_LIMIT}).")
-        return False
 
     x, y = get_mouse_world_pos()
 
@@ -351,150 +316,53 @@ def click_cell():
         original_selected_cells = get_selection()
         return False
 
-    if (x,y) in alive_cells_on_board:
-        alive_cells_on_board.discard((x,y))
-    else:
-        alive_cells_on_board.add((x,y))
+    history_1_step() # Checkpoint the pre-edit state so this toggle can be undone
+    chunk_grid.set_cell(x, y, 1 - chunk_grid.get_cell(x, y)) # Toggle the cell state
     return True
-
-# Turn Set in Numpy Array
-def cells_to_array(alive_cells, padding=1):
-    if not alive_cells:
-        return None, 0, 0
-    
-    coords = np.array(list(alive_cells))  # Shape: (n, 2) -> | 0 = x, | 1 = y
-    xs = coords[:, 0]
-    ys = coords[:, 1]
-    
-    x_min, x_max = xs.min(), xs.max()
-    y_min, y_max = ys.min(), ys.max()
-    
-    width = (x_max - x_min + 1) + 2 * padding
-    height = (y_max - y_min + 1) + 2 * padding
-    
-    grid = np.zeros((height, width), dtype=np.uint8)
-    
-    grid_x = xs - x_min + padding
-    grid_y = ys - y_min + padding
-    grid[grid_y, grid_x] = 1 
-    
-    return grid, x_min - padding, y_min - padding
-
-# Setup Neighbor roll with a dictionary for customablity)
-
-# Update the Neighbors using the Numpy roll
-def count_neighbors(grid):
-    n = np.zeros_like(grid, dtype=np.uint8)
-    offsets = settings_window.give_neighbor_offsets()
-    for dx, dy in offsets:
-        n += np.roll(np.roll(grid, dy, axis=0), dx, axis=1)
-    return n    
-
-def array_update(grid, birth_values, survive_values):
-    neighbor_count = count_neighbors(grid)
-
-    birth_mask = np.isin(neighbor_count, list(birth_values)) & (grid == 0)
-    survive_mask = np.isin(neighbor_count, list(survive_values)) & (grid == 1)
-
-    return (birth_mask | survive_mask).astype(np.uint8)
-
-# Convert the Numpy Array back in a setty set :P
-def array_to_cells(grid, offset_x, offset_y):
-    ys, xs = np.where(grid == 1)
-    xs = xs + offset_x
-    ys = ys + offset_y
-    return set(zip(xs.tolist(), ys.tolist()))
-
-# Sync the set with the grid (if it needs to lol)
-def make_set_synced():
-    global alive_cells_on_board, set_is_old
-    if set_is_old: # If its old update
-        if sim_grid is not None:
-            count = int(sim_grid.sum())
-            if count > SYNC_LIMIT:
-                print(f"⚠ {count} alive cells | Skipped syncing (maximum cells {SYNC_LIMIT})")
-                return False
-            alive_cells_on_board = array_to_cells(sim_grid, sim_offset_x, sim_offset_y)
-        else:
-            alive_cells_on_board = set()
-        set_is_old = False
-    return True
-
-# Update the sizes with margin if needed
-def grow_if_needed(grid, offset_x, offset_y):
-    h, w = grid.shape
-    edge_alive = (
-        grid[0:2, :].any() or # Top edge
-        grid[-2:, :].any() or # Bottom edge
-        grid[:, 0:2].any() or # Left edge
-        grid[:, -2:].any()    # Right edge
-    )
-    if not edge_alive:
-        return grid, offset_x, offset_y
-
-    new_h, new_w = h + GROWTH_MARGIN * 2, w + GROWTH_MARGIN * 2
-    new_grid = np.zeros((new_h, new_w), dtype=np.uint8)
-    new_grid[GROWTH_MARGIN:GROWTH_MARGIN + h, GROWTH_MARGIN:GROWTH_MARGIN + w] = grid
-    return new_grid, offset_x - GROWTH_MARGIN, offset_y - GROWTH_MARGIN
-
-# Sync the grid
-def sync_grid_from_set():
-    global sim_grid, sim_offset_x, sim_offset_y, current_grid, grid_offset_x, grid_offset_y, set_is_old
-    grid, offset_x, offset_y = cells_to_array(alive_cells_on_board, padding=1)
-    sim_grid = grid
-    sim_offset_x, sim_offset_y = offset_x, offset_y
-    current_grid = grid
-    grid_offset_x, grid_offset_y = offset_x, offset_y
-    set_is_old = False
-
-# THE ENTIER UPDATE CELLS (just with fast numpy now + faster)
-def numpy_update():
-    global sim_grid, sim_offset_x, sim_offset_y, set_is_old, current_grid, grid_offset_x, grid_offset_y
-
-    if sim_grid is None:
-        return # do nuthing if nuthing there
-
-    sim_grid, sim_offset_x, sim_offset_y = grow_if_needed(sim_grid, sim_offset_x, sim_offset_y)
-    sim_grid = array_update(sim_grid, birth_values, survive_values)
-
-    current_grid = sim_grid
-    grid_offset_x, grid_offset_y = sim_offset_x, sim_offset_y
-
-    set_is_old = True
 
 # Fast Numpy Draw cells (one big image not many smoll images)
 def draw_cells_from_grid():
-    if current_grid is None:
+    bbox = chunk_grid.global_bbox()
+    if bbox is None:
         return
     step = get_step()
 
-    grid_h, grid_w = current_grid.shape
+    view_min_x, view_min_y = math.floor(camera_x / step), math.floor(camera_y / step)
+    view_max_x, view_max_y = math.ceil((camera_x + WIDTH) / step), math.ceil((camera_y + HEIGHT) / step)
 
-    # Visible area
-    view_min_x = math.floor(camera_x / step)
-    view_max_x = math.ceil((camera_x + WIDTH) / step)
-    view_min_y = math.floor(camera_y / step)
-    view_max_y = math.ceil((camera_y + HEIGHT) / step)
+    size = chunk_grid.CHUNK_SIZE
+    cx_start, cx_end = view_min_x // size, (view_max_x - 1) // size
+    cy_start, cy_end = view_min_y // size, (view_max_y - 1) // size
 
-    # World Cordinates of cells
-    x_start = max(0, view_min_x - grid_offset_x)
-    x_end = min(grid_w, view_max_x - grid_offset_x)
-    y_start = max(0, view_min_y - grid_offset_y)
-    y_end = min(grid_h, view_max_y - grid_offset_y)
+    cell_color = settings_window.give_cell_color()
 
-    if x_start >= x_end or y_start >= y_end:
-        return 
+    for cx in range(cx_start, cx_end + 1):
+        for cy in range(cy_start, cy_end + 1):
+            chunk = chunk_grid.chunks.get((cx, cy))
+            if chunk is None:
+                continue
 
-    visible_grid = current_grid[y_start:y_end, x_start:x_end]
+            chunk_world_x, chunk_world_y = cx * size, cy * size
 
-    scaled = np.kron(visible_grid, np.ones((step, step), dtype=np.uint8))
-    cell_color = settings_window.give_cell_color()  # Get the current cell color from settings
-    rgb = np.stack([scaled*cell_color[0], scaled*cell_color[1], scaled*cell_color[2]], axis=-1)
+            x_start = max(0, view_min_x - chunk_world_x)
+            x_end = min(size, view_max_x - chunk_world_x)
+            y_start = max(0, view_min_y - chunk_world_y)
+            y_end = min(size, view_max_y - chunk_world_y)
 
-    surf = pygame.surfarray.make_surface(rgb.swapaxes(0,1))
-    screen_x = round((x_start + grid_offset_x) * step - camera_x)
-    screen_y = round((y_start + grid_offset_y) * step - camera_y)
-    screen.blit(surf, (screen_x, screen_y))
+            if x_start >= x_end or y_start >= y_end:
+                continue
+
+            visible = chunk[y_start:y_end, x_start:x_end]
+            if not visible.any():
+                continue
+
+            scaled = np.kron(visible, np.ones((step, step), dtype=np.uint8))
+            rgb = np.stack([scaled*cell_color[0], scaled*cell_color[1], scaled*cell_color[2]], axis=-1)
+            surf = pygame.surfarray.make_surface(rgb.swapaxes(0,1))
+
+            screen_x = round((chunk_world_x + x_start) * step - camera_x)
+            screen_y = round((chunk_world_y + y_start) * step - camera_y)
+            screen.blit(surf, (screen_x, screen_y))
 
 # Helpy functions for rotate/drag
 def get_center_for(thing):
@@ -509,7 +377,7 @@ def get_center_for(thing):
 
     return (center_x, center_y)
 
-def rotate_cells(thing, clockwise=True): # rotate around da center
+def rotate_cells(thing, clockwise=True): # Rotate around da center
     if not thing:
         return set()
 
@@ -520,7 +388,7 @@ def rotate_cells(thing, clockwise=True): # rotate around da center
     else:
         return {((-y + center_y) + center_x, (x - center_x) + center_y) for (x, y) in thing}
 
-def mirror_cells(thing, x_axis=True): # mirror around the center
+def mirror_cells(thing, x_axis=True): # Mirror around the center
     if not thing:
         return set()
 
@@ -531,8 +399,8 @@ def mirror_cells(thing, x_axis=True): # mirror around the center
     else:
         return {(x, 2 * center_y - y) for (x, y) in thing}
     
-def select_field(event):
-    global selecting, has_selection, dragging_selection, start, end, alive_selected_cells, clipboard, start_drag_selection, was_active_before_edit, active, original_selected_cells, needs_sync
+def select_field(event): 
+    global selecting, has_selection, dragging_selection, start, end, alive_selected_cells, clipboard, start_drag_selection, was_active_before_edit, active, original_selected_cells
     if event.type == pygame.MOUSEBUTTONDOWN:
         if event.button == 3 and not dragging_selection: # Start Selecting
             x, y = get_mouse_world_pos()
@@ -545,81 +413,70 @@ def select_field(event):
             active = False
 
     if event.type == pygame.MOUSEBUTTONUP:
-        synced = make_set_synced()
         if event.button == 3: # Stop Selecting
             selecting = False
-            if synced:
-                has_selection = True
-                alive_selected_cells = get_selection()
-            else:
-                print(f"⚠ {int(sim_grid.sum())} alive cells | Too large to select directly (limit {SYNC_LIMIT})")
-                has_selection = False
-                active = was_active_before_edit
+            has_selection = True
+            alive_selected_cells = get_selection()
         if dragging_selection and event.button == 1: # Stop Drag
             dragging_selection = False
             has_selection = False
-            if not synced:
-                print(f"⚠ {int(sim_grid.sum())} alive cells | Too large to drop directly (limit {SYNC_LIMIT})")
-                active = was_active_before_edit
-            else:
-                x_min = min(start[0], end[0])
-                y_min = min(start[1], end[1])
-                x, y = get_mouse_world_pos()
-                delta_x = x - start_drag_selection[0]
-                delta_y = y - start_drag_selection[1]
+            x_min, _, y_min, _ = get_max_min_from_selection()
+            x, y = get_mouse_world_pos()
+            delta_x = x - start_drag_selection[0]
+            delta_y = y - start_drag_selection[1]
 
+            if delta_x != 0 or delta_y != 0: # Only touch history if the selection actually moved
                 old_positions = {(dx + x_min, dy + y_min) for (dx, dy) in original_selected_cells}
                 new_positions = {(dx + x_min + delta_x, dy + y_min + delta_y) for (dx, dy) in alive_selected_cells}
-
-                alive_cells_on_board.difference_update(old_positions)
-                alive_cells_on_board.update(new_positions)
-
-                active = was_active_before_edit
-                needs_sync = True
+                history_1_step() # Checkpoint the pre-drag state so the move can be undone
+                chunk_grid.remove_cells(old_positions)
+                chunk_grid.set_cells(new_positions, 1)
                 redo_history.clear()
 
+            active = was_active_before_edit
+
     if event.type == pygame.MOUSEMOTION:
-        if selecting: # while you hold rightclick select duh
+        if selecting: # While you hold rightclick select duh
             x, y = get_mouse_world_pos()
             end = (x,y)
 
     if event.type == pygame.KEYDOWN:
         if has_selection and event.key == pygame.K_BACKSPACE: # Delete Selected
-            x_min = min(start[0], end[0])
-            y_min = min(start[1], end[1])
-            for (dx, dy) in original_selected_cells if dragging_selection else alive_selected_cells:
-                alive_cells_on_board.discard((dx + x_min, dy + y_min))
+            x_min, _, y_min, _ = get_max_min_from_selection()
+            cells_to_delete = original_selected_cells if dragging_selection else alive_selected_cells
+            if cells_to_delete: # Only touch history if the selection actually has cells to delete
+                history_1_step() # Checkpoint the pre-delete state so the deletion can be undone
+                chunk_grid.remove_cells({(dx+x_min, dy+y_min) for (dx,dy) in cells_to_delete})
+                redo_history.clear()
             dragging_selection = False
             has_selection = False
             active = was_active_before_edit
-            needs_sync = True
-            redo_history.clear()
 
-        if event.key == pygame.K_e:
+        if event.key == pygame.K_a:
             if dragging_selection and alive_selected_cells: # Rotate the drag | CW
                 alive_selected_cells = rotate_cells(alive_selected_cells, clockwise=True)
             elif clipboard: # Rotate the Copy to Paste | CW
                 clipboard = rotate_cells(clipboard, clockwise=True)
 
-        if event.key == pygame.K_q:
+        if event.key == pygame.K_d:
             if dragging_selection and alive_selected_cells: # Rotate the drag | CCW
                 alive_selected_cells = rotate_cells(alive_selected_cells, clockwise=False)
             elif clipboard: # Rotate the Copy to Paste | CCW
                 clipboard = rotate_cells(clipboard, clockwise=False)
 
-        if event.key == pygame.K_w:
-            if dragging_selection and alive_selected_cells: # Mirror the drag left right
+        if event.key == pygame.K_s:
+            if dragging_selection and alive_selected_cells: # Mirror the drag up down
                 alive_selected_cells = mirror_cells(alive_selected_cells, x_axis=False)
-            elif clipboard: # Mirror the Copy to Paste left right
+            elif clipboard: # Mirror the Copy to Paste up down
                 clipboard = mirror_cells(clipboard, x_axis=False)
 
-        if event.key == pygame.K_2:
-            if dragging_selection and alive_selected_cells: # Mirror the drag up down
+        if event.key == pygame.K_w:
+            if dragging_selection and alive_selected_cells: # Mirror the drag left right
                 alive_selected_cells = mirror_cells(alive_selected_cells, x_axis=True)
-            elif clipboard: # Mirror the Copy to Paste up down
+            elif clipboard: # Mirror the Copy to Paste left right
                 clipboard = mirror_cells(clipboard, x_axis=True)
 
-# draw the select rect with start(x,y) and end(x,y)
+# Draw the select rect with start(x,y) and end(x,y)
 def draw_selection():
     step = get_step()
     if selecting or has_selection:
@@ -636,7 +493,7 @@ def draw_selection():
         )
 
         fill_surface = pygame.Surface((round(width*step), round(height*step)), pygame.SRCALPHA)
-        fill_surface.fill((0, 32, 255, 80))  # RGBA
+        fill_surface.fill((0, 32, 255, 80))  # RGBA for a blue rect
         
         screen.blit(fill_surface, (rect.x, rect.y))
 
@@ -644,45 +501,47 @@ def draw_selection():
 
 # Check if the cell is in the rect
 def point_in_selection(x,y):
-    x_min = min(start[0], end[0])
-    y_min = min(start[1], end[1])
-    x_max = max(start[0], end[0])
-    y_max = max(start[1], end[1])
+    x_min, x_max, y_min, y_max = get_max_min_from_selection()
     return x_min <= x <= x_max and y_min <= y <= y_max
 
 # Get every alive cell in rect
 def get_selection():
-    make_set_synced()
-    x_min = min(start[0], end[0])
-    y_min = min(start[1], end[1])
-    
-    return {(x - x_min, y - y_min) for (x, y) in alive_cells_on_board if point_in_selection(x, y)}
+    x_min, x_max, y_min, y_max = get_max_min_from_selection()
+    alive_rect_cells = chunk_grid.iterate_alive_in_rect(x_min, y_min, x_max, y_max)
+    return {(x - x_min, y - y_min) for (x, y) in alive_rect_cells}
 
 # Paste the clipboard
 def paste_cells():
-    if not make_set_synced():
-        print("⚠ Board too large to paste into directly.")
+    if not clipboard: # Nothing to paste -> don't waste a history slot / wipe redo on a no-op
         return False
-    
+
     x, y = get_mouse_world_pos()
     cordinates_clipboard = {(dx + x, dy + y) for (dx, dy) in clipboard}
-    alive_cells_on_board.update(cordinates_clipboard)
+    history_1_step() # Checkpoint the pre-paste state so the paste can be undone
+    chunk_grid.set_cells(cordinates_clipboard, 1)
     return True
 
 # Draw a lil preview where/what you will paste
 def draw_paste_preview():
+    if not clipboard:
+        return
     step = get_step()
     x, y = get_mouse_world_pos()
+    cell_color_rgb = settings_window.give_cell_color()
+    cell_color_rgba = (*cell_color_rgb, 80)
 
-    preview_cells = {(dx + x, dy + y) for (dx, dy) in clipboard}
+    xs = [dx + x for dx, _ in clipboard]
+    ys = [dy + y for _, dy in clipboard]
+    min_x, min_y = min(xs), min(ys)
+    width = (max(xs) - min_x + 1) * step
+    height = (max(ys) - min_y + 1) * step
 
-    for dx, dy in preview_cells:
-        fill_surface = pygame.Surface((round(step), round(step)), pygame.SRCALPHA)
-        cell_color_rgb = settings_window.give_cell_color()
-        cell_color_rgba = (*cell_color_rgb, 80)
-        fill_surface.fill(cell_color_rgba)  # RGBA color_hex
-        
-        screen.blit(fill_surface, (round(dx*step - camera_x), round(dy*step - camera_y)))
+    overlay = pygame.Surface((width, height), pygame.SRCALPHA)
+    for dx, dy in clipboard:
+        px, py = (dx + x - min_x) * step, (dy + y - min_y) * step
+        overlay.fill(cell_color_rgba, pygame.Rect(px, py, step, step))
+
+    screen.blit(overlay, (round(min_x * step - camera_x), round(min_y * step - camera_y)))
 
 def draw_drag_preview():
     if dragging_selection:
@@ -706,63 +565,39 @@ def draw_drag_preview():
             fill_surface.fill(cell_color_rgba)  # RGBA color_hex
             screen.blit(fill_surface, (round(new_x*step - camera_x), round(new_y*step - camera_y)))
 
-def history_1_step(): # update history if 1 single step
+def _reset_selection_state(): # Clear any selection/drag state so it can't reference a now-stale grid
+    global has_selection, selecting, dragging_selection, active
+    if has_selection or selecting or dragging_selection:
+        has_selection = False
+        selecting = False
+        dragging_selection = False
+        active = was_active_before_edit
+
+# UPDATE HISTORY LATER FOR ACTUAL UNDO ETC
+def history_1_step():
     global history, redo_history
-    if sim_grid is not None:
-        packed = np.packbits(sim_grid)
-        history.append((gen, packed, sim_grid.shape, sim_offset_x, sim_offset_y))
-    else:
-        history.append((gen, None, (0, 0), 0, 0))
+    history.append(gen)
     redo_history.clear()
+    chunk_grid.clear_dirty()
 
-def history_undo(): # update history if undo
-    global history, redo_history, gen, sim_grid, sim_offset_x, sim_offset_y, current_grid, grid_offset_x, grid_offset_y, set_is_old, needs_sync
+def history_undo():
+    global history, redo_history, gen
     if history:
-        if sim_grid is not None:
-            packed_now = np.packbits(sim_grid)
-            redo_history.append((gen, packed_now, sim_grid.shape, sim_offset_x, sim_offset_y))
-        else:
-            redo_history.append((gen, None, (0, 0), 0, 0))
+        redo_history.append(gen)
+        gen = history.pop()
+        _reset_selection_state()
 
-        gen, packed, shape, ox, oy = history.pop()
-        if packed is not None:
-            h, w = shape
-            sim_grid = np.unpackbits(packed)[:h * w].reshape(shape)
-        else:
-            sim_grid = None
-
-        sim_offset_x, sim_offset_y = ox, oy
-        current_grid = sim_grid
-        grid_offset_x, grid_offset_y = ox, oy
-        set_is_old = True
-        needs_sync = False
-
-def history_redo(): # update history if redo
-    global history, redo_history, gen, sim_grid, sim_offset_x, sim_offset_y, current_grid, grid_offset_x, grid_offset_y, set_is_old, needs_sync
+def history_redo():
+    global history, redo_history, gen
     if redo_history:
-        if sim_grid is not None:
-            packed_now = np.packbits(sim_grid)
-            history.append((gen, packed_now, sim_grid.shape, sim_offset_x, sim_offset_y))
-        else:
-            history.append((gen, None, (0, 0), 0, 0))
-
-        gen, packed, shape, ox, oy = redo_history.pop()
-        if packed is not None:
-            h, w = shape
-            sim_grid = np.unpackbits(packed)[:h * w].reshape(shape)
-        else:
-            sim_grid = None
-
-        sim_offset_x, sim_offset_y = ox, oy
-        current_grid = sim_grid
-        grid_offset_x, grid_offset_y = ox, oy
-        set_is_old = True
-        needs_sync = False
+        history.append(gen)
+        gen = redo_history.pop()
+        _reset_selection_state()
 
 def manage_history(action):
-    global gen, history, redo_history, needs_sync
+    global gen, history, redo_history
     if action == "step":
-        if gen % HISTORY_SAVE_EVERY_GEN == 0:  # Save history every 10 generations
+        if gen % HISTORY_SAVE_EVERY_GEN == 0:  # Save history every X generations
             history_1_step()
         gen += 1
     elif action == "undo":
@@ -773,40 +608,57 @@ def manage_history(action):
         history.clear()
         redo_history.clear()
         gen = 0
-        needs_sync = True
-    
+
+# Create a random soup fill
+def random_fill():
+    x_min, x_max, y_min, y_max = get_max_min_from_selection()
+    density_percent = settings_window.density_percent  # get desity from settings_window (% value)
+
+    # Convert % in int for the loop
+    max_cells = (x_max + 1 - x_min) * (y_max + 1 - y_min)
+    density = round(max(1, (max_cells * density_percent) / 100))
+
+    added_cells = {(random.randrange(x_min, x_max + 1),random.randrange(y_min, y_max + 1)) for _ in range(density)} # Add prevention for multiple cells at 1 spot
+
+    history_1_step()
+    chunk_grid.set_cells(added_cells, 1)
+    redo_history.clear()
+
 # Print the Controls + Intro
 print("Welcome to GoL:\n")
 print("Controls:")
-print("  's'                    = Save .rle file")
-print("  'l'                    = Load .rle file")
-print("  'r'                    = Clear / Reset")
+print("  'Space'                = Pause")
+print("  't'                    = Clear / Terminate")
 print("  'n'                    = Go 1 Step / Gen")
 print("  'f'                    = Center cam once")
-print("  'g'                    = Toggle center cam")
-print("  'p'                    = Show Paste Preview")
-print("  'e'                    = Turn CW")
-print("  'q'                    = Turn CCW")
-print("  'w'                    = Mirror left right")
-print("  '2'                    = Mirror up down")
-print("  'Backspace + Selected' = Delete")
 print("  'Right'                = +1 GpS")
 print("  'Up'                   = +10 GpS")
 print("  'Left'                 = -1 GpS")
 print("  'Down'                 = -10 GpS")
+print("  'Ctrl + k'             = Save .rle file") 
+print("  'Ctrl + l'             = Load .rle file")
 print("  'Ctrl + z'             = Undo by 1")
 print("  'Ctrl + u'             = Undo by 10")
 print("  'Ctrl + y'             = Redo by 1")
 print("  'Ctrl + x'             = Redo by 10")
+print("  'Ctrl + c + Selected'  = Copy")
+print("  'Ctrl + v + Selected'  = Paste")
+print("  'a + Drag'             = Turn CW")
+print("  'd + Drag'             = Turn CCW")
+print("  'w + Drag'             = Mirror left right")
+print("  's + Drag'             = Mirror up down")
 print("  'LeftClick'            = Toggle alive/dead")
 print("  'LeftClick + Selected' = Drag")
+print("  'Backspace + Selected' = Delete")
+print("  'r + Selected'         = Random fill the selected rect")
 print("  'Hold Rightclick'      = Select")
 print("  'MouseWheel'           = Zoom")
-print("  'Hold MouseWheel'      = Move cam\n")
+print("  'Hold MouseWheel'      = Move cam")
+print("  '0-9'                  = Print hotkeys\n")
 
-# Start of Game
+# Start of Game / Main Loop
 while game_running:
-
+    show_preview, disable_grid, cam_in_center = settings_window.give_checkbox_toggles()
     try:
         settings_root.update()
     except tk.TclError:
@@ -823,13 +675,12 @@ while game_running:
         if event.type == pygame.KEYDOWN: # Toggle active
             if event.key == pygame.K_SPACE and not has_selection and not selecting and not dragging_selection:
                 active = not active
-            if event.key == pygame.K_s: # Save
+            if event.key == pygame.K_k and event.mod & pygame.KMOD_CTRL: # Save
                 if save_rle(SAVING_FILE):
                     print("Saved .rle!")
-            if event.key == pygame.K_l: # Load
-                set_is_old = False
-                make_set_synced()
-                alive_cells_on_board = load_rle(LOADING_FILE) 
+            if event.key == pygame.K_l and event.mod & pygame.KMOD_CTRL: # Load
+                chunk_grid.clear_all()
+                chunk_grid.set_cells(load_rle(LOADING_FILE), 1) 
                 manage_history("reset")
                 center_cam()
                 print("Loaded .rle!")
@@ -840,13 +691,11 @@ while game_running:
                     active = was_active_before_edit
             if event.key == pygame.K_n and not active and not has_selection and not selecting and not dragging_selection: # +1 Step
                 manage_history("step")
-                numpy_update()
+                chunk_grid.step(birth_values, survive_values)
                 if cam_in_center and gen % CAM_CENTER_EVERY_GEN == 0: # Only center cam every CAM_CENTER_EVERY_GEN for performance
                     center_cam()
-            if event.key == pygame.K_r: # Clear / Reset
-                alive_cells_on_board.clear()
-                set_is_old = False
-                make_set_synced()
+            if event.key == pygame.K_t: # Clear / Terminate
+                chunk_grid.clear_all()
                 manage_history("reset")
                 if has_selection or selecting or dragging_selection:
                     has_selection = False
@@ -880,22 +729,20 @@ while game_running:
 
             if event.key == pygame.K_v and event.mod & pygame.KMOD_CTRL and not has_selection and not selecting and not dragging_selection: # Paste
                 if paste_cells():
-                    needs_sync = True
                     redo_history.clear()
-
-            if event.key == pygame.K_p:
-                show_preview = not show_preview
-
-            if event.key == pygame.K_g: # Toggle center cam with 'g'
-                cam_in_center = not cam_in_center
 
             if event.key == pygame.K_f: # Center cam once with 'f'
                 center_cam()
 
-        if event.type == pygame.MOUSEBUTTONDOWN: # get click input and turn them into board pos + color them with board
+            if event.key == pygame.K_r:
+                if has_selection and not dragging_selection:
+                    random_fill()
+                    has_selection = False
+                    active = was_active_before_edit
+
+        if event.type == pygame.MOUSEBUTTONDOWN: # Get click input and turn them into board pos + color them with board
             if event.button == 1:  # Leftclick
                 if click_cell():
-                    needs_sync = True
                     redo_history.clear()
             if event.button == 2: # Middle Drag Cam
                 dragging = True
@@ -906,7 +753,7 @@ while game_running:
                 dragging = False
 
         if event.type == pygame.MOUSEMOTION:
-            if dragging: # cam drag
+            if dragging: # Cam drag
                 mx, my = pygame.mouse.get_pos()
 
                 dx = mx - last_mouse_pos[0]
@@ -936,19 +783,16 @@ while game_running:
         select_field(event)
         numpad(event)
 
-    if needs_sync: # Syncs if manual changed before
-        sync_grid_from_set()
-        needs_sync = False
-
     draw_cells_from_grid() # draw each cell
 
-    if show_preview: # Draw the preview if Toggled True
+    if show_preview: # Draw the preview if Toggled True | CHANGE IN THE SETTINGS
         draw_paste_preview()
 
     draw_drag_preview() # Draw the drag preview if dragging selection
 
-    if cell_size  * zoom >= 4:
-        draw_grid(line_width) # draw board grid above
+    if not disable_grid:
+        if cell_size * zoom >= 4:
+            draw_grid(line_width) # draw board grid above
 
     draw_selection() # draw the selection rect (right click stuffy) if selecting or has selection
 
@@ -962,7 +806,7 @@ while game_running:
         pygame.event.pump()
         if active:
             manage_history("step")
-            numpy_update()
+            chunk_grid.step(birth_values, survive_values)
             if cam_in_center and gen % CAM_CENTER_EVERY_GEN == 0: # Only center cam every CAM_CENTER_EVERY_GEN for performance
                 center_cam()
 
@@ -970,7 +814,7 @@ while game_running:
 
     birth_str = "".join(str(n) for n in sorted(birth_values))
     survive_str = "".join(str(n) for n in sorted(survive_values))
-    pygame.display.set_caption(f"Rule = B{birth_str}/S{survive_str} | Gen = {gen} | Alive={int(sim_grid.sum()) if sim_grid is not None else 0} | GpS = {GpS} | FPS = {clock.get_fps():.1f} | Running = {active} | Cam centered = {cam_in_center} | Show Preview = {show_preview}") # Update Data
+    pygame.display.set_caption(f"Rule = B{birth_str}/S{survive_str} | Gen = {gen} | Alive={chunk_grid.total_alive_count()} | GpS = {GpS} | FPS = {clock.get_fps():.1f} | Running = {active}") # Update Data
     pygame.display.flip()
 
 pygame.quit()
